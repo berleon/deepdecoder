@@ -22,7 +22,7 @@ from keras.datasets import mnist
 
 from keras.layers.core import Dense, Activation, Reshape, Dropout, Flatten, \
     MaxoutDense
-from keras.optimizers import Adam
+from keras.optimizers import Adam, SGD
 from scipy.misc import imsave
 import numpy as np
 
@@ -63,9 +63,10 @@ def main():
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
     imsave("mnist0.png", X_train[0])
     X_train = X_train.reshape(-1, 784) / 255.
-    mnist_gan.compile('adam')
+    sgd = SGD(lr=0.005, decay=1e-6, momentum=0.8, nesterov=True)
+    mnist_gan.compile(sgd)
     # mnist_gan.print_svg()
-    mnist_gan.fit(X_train, z_shape=(X_train.shape[0], nb_z), nb_epoch=100,
+    mnist_gan.fit(X_train, z_shape=(X_train.shape[0], nb_z), nb_epoch=150,
                   batch_size=100, verbose=0,
                   callbacks=[Sample("mnist_samples", (60, nb_z)),
                              LossPrinter(), ModelCheckpoint("models_{}.hdf5")])
