@@ -63,10 +63,9 @@ def main():
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
     imsave("mnist0.png", X_train[0])
     X_train = X_train.reshape(-1, 784) / 255.
-    adam = Adam(lr=0.001)
-    mnist_gan.compile(adam)
+    mnist_gan.compile('adam')
     # mnist_gan.print_svg()
-    mnist_gan.fit(X_train, z_shape=(X_train.shape[0], nb_z), nb_epoch=30,
+    mnist_gan.fit(X_train, z_shape=(X_train.shape[0], nb_z), nb_epoch=300,
                   batch_size=100, verbose=0,
                   callbacks=[Sample("mnist_samples", (60, nb_z)),
                              LossPrinter(), ModelCheckpoint("models_{}.hdf5")])
