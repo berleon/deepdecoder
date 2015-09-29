@@ -18,9 +18,13 @@ import random
 from PIL import Image
 import h5py
 from keras.callbacks import ModelCheckpoint, EarlyStopping
-from keras.layers.core import Layer, Flatten, Dense
+from keras.layers.convolutional import Convolution2D
+from keras.layers.core import Layer, Dense, Activation, Flatten
 from keras.models import Sequential
+from keras.objectives import binary_crossentropy, epsilon
 from keras.utils.theano_utils import floatX
+import math
+import skimage
 
 import theano
 import theano.tensor as T
@@ -45,22 +49,22 @@ def get_dataset(hdf5_file):
     return f['data'], f['labels']
 
 
-def proposal_error(y_true, y_pred):
+def saliency_error(y_true, y_pred):
+    y_pred = T.clip(y_pred, epsilon, 1.0 - epsilon)
     base_loss = T.nnet.binary_crossentropy(y_pred, y_true)
-    loss = T.set_subtensor(base_loss[y_true == 1], base_loss[y_true == 1]*15)
+    loss = T.set_subtensor(base_loss[T.eq(y_true, 1)],
+                           base_loss[T.eq(y_true, 1)], inplace=False)
     return loss.mean(axis=-1)
 
 
 def preprocess_img(data):
     data = floatX(data)
     data = data / 255
-    # data = data / data.sum(axis=1)[:, np.newaxis]
     return data.reshape((1, 1, data.shape[0], data.shape[1]))
 
 
 def preprocess(data, labels):
-    data = floatX(data)
-    data = data.reshape(data.shape[0], 100) / 255
+    data = floatX(data) / 255
     # data = data / data.sum(axis=1)[:, np.newaxis]
     return data, floatX(labels)
 
@@ -93,26 +97,43 @@ def im2col(im, psize, n_channels=3):
          psize, psize)).dimshuffle((1, 2, 0, 3, 4))
 
 
-def sample_locations(saliency_map, nwalkers=1000):
-    height = saliency_map.shape[0]
-    width = saliency_map.shape[1]
+def sample_locations(saliency_map, random_selection_threshold=0.3):
+    saliency_threshold = saliency_map > 0.9
+    print("num pixels: {}".format(saliency_threshold.sum()))
+    random_selection = np.random.sample(saliency_map.shape) < random_selection_threshold
+    selected_indicies = (saliency_threshold & random_selection)
+    return np.asarray(selected_indicies.nonzero())
 
+
+def sample_locations_old(saliency_map, nwalkers=1000, walkers_per_iter=50):
     def lnprob(x):
         if x[0] < 0 or x[1] < 0:
             return float("-inf")
         try:
-            return saliency_map[x[0], x[1]]
+            prob = saliency_map[x[0], x[1]]
+            if prob < 0.9:
+                return float("-inf")
+            else:
+                return math.log(prob / saliency_sum)
         except IndexError:
             # TODO: Exceptions are slow
             return float("-inf")
-
+    iterations = nwalkers // walkers_per_iter
+    total_samples = walkers_per_iter*iterations
     ndim = 2
-    p0 = [[random.randint(0, saliency_map.shape[0]),
-           random.randint(0, saliency_map.shape[1])]
-          for _ in range(nwalkers)]
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob)
-    pos, prob, state = sampler.run_mcmc(p0, 100)
-    return pos
+    all_pos = np.zeros((total_samples, ndim))
+    for i in range(iterations):
+        p0 = [[random.randint(0, saliency_map.shape[0]),
+               random.randint(0, saliency_map.shape[1])]
+              for _ in range(walkers_per_iter)]
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob)
+        pos, prob, state = sampler.run_mcmc(p0, 50)
+        all_pos[i*walkers_per_iter:(i+1)*walkers_per_iter, :] = pos
+        for p in pos:
+            rr, cc = skimage.draw.circle(p[0], p[1], 4)
+            saliency_map[rr, cc] *= 0.8
+
+    return all_pos
 
 
 class SaliencyNetwork(object):
@@ -121,10 +142,11 @@ class SaliencyNetwork(object):
 
     def __init__(self, weight_file):
         self.weight_file = weight_file
-        self.net = self.build_network()
-        self.net.load_weights(weight_file)
-        weights = self.net.layers[0].params[0]
-        self._saliency_fn = self.build_saliency(T.reshape(weights, (1, 1, 10, 10), ndim=4))
+        train_net = self.build_network(train=True)
+        train_net.load_weights(weight_file)
+        self.net = self.build_network(train=False)
+        self.copy_network_weights(train_net, self.net)
+        self._saliency_fn = self.build_saliency(self.net)
 
     def _resize_size(self, im_size):
         def scale_cooordinate(size, i):
@@ -143,34 +165,45 @@ class SaliencyNetwork(object):
         return self._saliency_fn(np_img)[0]
 
     @staticmethod
-    def build_saliency(weight_mask):
-        img = T.tensor4(name='img')
-        saliency = conv2d(
-            img, weight_mask,
-            filter_shape=(1, 1, 10, 10), border_mode='valid')
+    def build_saliency(net):
         mode = theano.compile.get_default_mode()
         mode = mode.including('conv_fft')
-        return theano.function([img], [saliency], mode=mode)
+        return theano.function([net.get_input(train=False)],
+                               [net.get_output(train=False)], mode=mode)
 
     @staticmethod
-    def build_network():
+    def build_network(train=True):
         net = Sequential()
-        net.add(Dense(100, 1, activation='sigmoid'))
-        net.compile('adam', proposal_error)
+        net.add(Convolution2D(5, 1, 3, 3, activation='relu'))
+        net.add(Convolution2D(5, 5, 3, 3, activation='relu'))
+        net.add(Convolution2D(1, 5, 6, 6, activation='sigmoid'))
+        if train:
+            net.add(Flatten())
+        net.compile('adam', saliency_error)
         return net
+
+    @staticmethod
+    def copy_network_weights(train, deploy):
+        for tr_layer, dp_layer in zip(train.layers, deploy.layers):
+            if type(tr_layer) == Flatten:
+                continue
+            for tp, dp in zip(tr_layer.params, dp_layer.params):
+                dp.set_value(tp.get_value())
 
 
 def main(args):
     train_hdf5_files = hdf5_file_list(args.train)
     val_hdf5_files = hdf5_file_list(args.val)
-    net = SaliencyNetwork.build_network()
+    net = SaliencyNetwork.build_network(train=True)
     train_x,  train_y = preprocess(*get_dataset(train_hdf5_files[0]))
     val_x,  val_y = preprocess(*get_dataset(val_hdf5_files[0]))
+    print(net.predict(train_x[:128]))
     net.fit(train_x, train_y, nb_epoch=5000, batch_size=128, verbose=1, shuffle=True,
             validation_data=(val_x, val_y),
-            callbacks=[ModelCheckpoint("saliency_net.hdf5", save_best_only=True), EarlyStopping(patience=50)])
+            callbacks=[ModelCheckpoint("saliency_net_big.hdf5", save_best_only=True),
+                       EarlyStopping(patience=5)])
 
-    net.save_weights("saved_saliency_net.hdf5")
+    net.save_weights("saved_saliency_net_big.hdf5")
     dense = net.layers[0]
     weights = dense.params[0].get_value()
     plt.set_cmap('gray')

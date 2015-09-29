@@ -14,6 +14,7 @@
 # limitations under the License.
 from skimage.draw import circle
 from skimage.draw._draw import circle_perimeter
+import time
 
 from proposal_net import SaliencyNetwork, sample_locations
 import matplotlib.pyplot as plt
@@ -24,26 +25,32 @@ def rrccLoc(loc, shape=None):
     return circle(loc[0], loc[1], 5, shape=shape)
 
 if __name__ == "__main__":
-    net = SaliencyNetwork("saved_saliency_net.hdf5")
-    sal, resized = net.saliency_file("/home/leon/uni/vision_swp/deeplocalizer_data/images/season_2015/cam1/groundtruth/Cam_1_20150821161518_254545.jpeg")
+    net = SaliencyNetwork("saved_saliency_net_big.hdf5")
+    start = time.time()
+    sal, resized = net.saliency_file("/home/leon/uni/vision_swp/deeplocalizer_data/images/season_2015/cam1/groundtruth/Cam_1_20150821161518_254545_wb.jpeg")
+    print("saliency+resize in: " + str(time.time() - start))
+    print(sal.shape)
     plt.set_cmap('gray')
-    plt.subplot(221)
+    #plt.subplot(221)
     slice_x = slice(None)
     slice_y = slice(None)
+    start = time.time()
+    locs = sample_locations(sal[0, 0], 1500)
+    print("sampled in: " + str(time.time() - start))
     plt.imshow(resized[0, 0, slice_x, slice_y])
-    locs = sample_locations(sal[0, 0], 2000)
-    locations = np.zeros(resized.shape[-2:])
-    for x, y in locs:
-        rr, cc = rrccLoc((x, y), locations.shape)
-        locations[rr, cc] = 10
-    plt.subplot(222)
+    plt.scatter(locs[1, :] + 5, locs[0, :] + 5, marker='x', c='r')
+    plt.show()
+    plt.clf()
     cmap = plt.get_cmap('coolwarm')
     print(sal.shape)
     print(sal[0, 0, slice_x, slice_y].shape)
     plt.imshow(sal[0, 0, slice_x, slice_y], cmap=cmap)
     plt.colorbar()
-    plt.subplot(223)
-    plt.imshow(locations[slice_x, slice_y], cmap=cmap)
+    plt.show()
+    plt.clf()
+    sal_threshold = sal
+    sal_threshold[sal < 0.9] = 0
+    plt.imshow(sal_threshold[0, 0, slice_x, slice_y], cmap=cmap)
     plt.show()
 
 
