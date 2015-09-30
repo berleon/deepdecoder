@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from argparse import ArgumentParser
 import os
 import itertools
 from deepdecoder import NUM_CELLS
@@ -20,6 +21,22 @@ import numpy as np
 
 import deepdecoder.generate_grids as gen_grids
 import deepdecoder.gt_grids as real_grids
+
+
+class NetworkArgparser(object):
+    def __init__(self, train_cb, test_cb):
+        self.parser = ArgumentParser()
+        subparsers = self.parser.add_subparsers()
+        self.parser_train = subparsers.add_parser(
+            "train", help="train the network")
+        self.parser_train.set_defaults(func=train_cb)
+        self.parser_test = subparsers.add_parser(
+            "test", help="test the network")
+        self.parser_test.set_defaults(func=test_cb)
+
+    def parse_args(self):
+        args = self.parser.parse_args()
+        args.func(args)
 
 
 class GeneratedGridTrainer(object):
