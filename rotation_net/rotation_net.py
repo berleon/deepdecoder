@@ -32,28 +32,28 @@ def get_model():
 
     model = Sequential()
     model.add(RotationTransformer(rot_model))
-    model.add(Convolution2D(16, 1, 3, 3, border_mode='full'))
-    model.add(Activation('relu'))
+    model.add(Convolution2D(16, 1, 3, 3, border_mode='valid',
+                            activation='relu'))
     model.add(MaxPooling2D(poolsize=(2, 2)))
     model.add(Dropout(0.5))
-    model.add(Convolution2D(32, 16, 2, 2))
-    model.add(Activation('relu'))
+    model.add(Convolution2D(32, 16, 2, 2, border_mode='valid',
+                            activation='relu'))
     model.add(MaxPooling2D(poolsize=(2, 2)))
     model.add(Dropout(0.5))
-    model.add(Convolution2D(48, 32, 2, 2))
+    model.add(Convolution2D(48, 32, 2, 2, border_mode='valid',
+                            activation='relu'))
     model.add(MaxPooling2D(poolsize=(2, 2)))
-    model.add(Activation('relu'))
     model.add(Dropout(0.5))
-    model.add(Convolution2D(48, 48, 2, 2, border_mode='same'))
-    model.add(Activation('relu'))
+    model.add(Convolution2D(48, 48, 2, 2, border_mode='valid',
+                            activation='relu'))
     model.add(Dropout(0.5))
 
     model.add(Flatten())
-    model.add(Dense(2352, 2048))
+    model.add(Dense(1200, 1200))
     model.add(Activation('relu'))
     model.add(Dropout(0.5))
 
-    model.add(Dense(2048, 512))
+    model.add(Dense(1200, 512))
     model.add(Activation('relu'))
     model.add(Dropout(0.5))
 
@@ -71,8 +71,9 @@ def train(args):
     model = get_model()
     trainer = GeneratedGridTrainer.GeneratedGridTrainer()
     trainer.artist = BlackWhiteArtist()
-    trainer.fit_data_gen()
-    trainer.save_iter = 30
+    trainer.use_preprocessor = False
+    trainer.minibatches_per_epoche = 50
+    trainer.save_iter = 20
     trainer.train(model, "weights_new")
 
 
