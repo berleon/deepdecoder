@@ -15,7 +15,6 @@ import os
 import itertools
 from deepdecoder import NUM_CELLS
 
-from keras.models import Sequential
 from keras.preprocessing.image import ImageDataGenerator
 import numpy as np
 
@@ -30,8 +29,9 @@ class GeneratedGridTrainer(object):
             featurewise_center=True, featurewise_std_normalization=False)
         self.minibatch_size = 128
         self.minibatches_per_epoche = 12
-        self.weight_dir = "weights/"
         self.save_iter = 20
+        self.use_preprocessor = True
+        self.artist = gen_grids.BadGridArtist()
         self.gt_files = []
 
     def set_gt_path_file(self, fname):
@@ -43,17 +43,21 @@ class GeneratedGridTrainer(object):
         grids = grids.astype(np.float32) / 255
         self.preprocessor.fit(grids)
 
-    def save_weights(self, model, iteration):
-        file = os.path.abspath("{}/{:0>4}_all_degrees_model.hdf5".format(self.weight_dir, iteration))
+    def save_weights(self, model, iteration, weight_dir="weights"):
+        file = os.path.abspath("{}/{:0>4}_all_degrees_model.hdf5".format(weight_dir, iteration))
         print("saving weights to: " + file)
         model.save_weights(file)
 
     def preprocessed(self, grids, labels, batch_size):
-        return next(self.preprocessor.flow(grids, labels,
-                                           batch_size=batch_size))
+        if self.use_preprocessor:
+            return next(self.preprocessor.flow(grids, labels,
+                                               batch_size=batch_size))
+        else:
+            return grids, labels
 
     def batches(self, batch_size=32):
-        for raw_grids, labels in gen_grids.batches(batch_size, self.generator):
+        for raw_grids, labels in gen_grids.batches(batch_size, self.generator,
+                                                   artist=self.artist):
             scaled = raw_grids.astype(np.float32)/255.
             yield self.preprocessed(scaled, labels, batch_size)
 
@@ -66,7 +70,10 @@ class GeneratedGridTrainer(object):
             # swap 0 and 1 in labels
             labels = np.zeros_like(raw_labels)
             labels[raw_labels == 0] = 1
-            yield self.preprocessed(scaled, labels, batch_size)
+            if self.use_preprocessor:
+                yield self.preprocessed(scaled, raw_labels, batch_size)
+            else:
+                yield scaled, labels
 
     def train(self, model, weight_dir):
         os.makedirs(weight_dir)
@@ -74,7 +81,7 @@ class GeneratedGridTrainer(object):
         for i, (grids, labels) in enumerate(self.batches(batch_size=bs)):
             print(i)
             if i % self.save_iter == 0:
-                self.save_weights(model, i)
+                self.save_weights(model, i, weight_dir)
             model.fit(grids, labels, nb_epoch=1,
                       batch_size=self.minibatch_size, verbose=1)
 
