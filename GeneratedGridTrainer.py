@@ -26,12 +26,16 @@ import deepdecoder.gt_grids as real_grids
 class NetworkArgparser(object):
     def __init__(self, train_cb, test_cb):
         self.parser = ArgumentParser()
-        subparsers = self.parser.add_subparsers()
-        self.parser_train = subparsers.add_parser(
+        self.subparsers = self.parser.add_subparsers()
+        self.parser_train = self.subparsers.add_parser(
             "train", help="train the network")
+        self.parser_train.add_argument("--weight-dir", default="weights",
+                                      help="directory from where to load weights")
         self.parser_train.set_defaults(func=train_cb)
-        self.parser_test = subparsers.add_parser(
+        self.parser_test = self.subparsers.add_parser(
             "test", help="test the network")
+        self.parser_test.add_argument("--weight-dir", default="weights",
+                                      help="directory from where to load weights")
         self.parser_test.set_defaults(func=test_cb)
 
     def parse_args(self):
@@ -120,6 +124,7 @@ class GeneratedGridTrainer(object):
                 lambda a: a[0] < n_epochs,
                 enumerate(data_generator(batch_size=bs))):
             prediction = model.predict(grids, batch_size=mini_bs, verbose=0)
+            print(prediction)
             bit_prediction = prediction > 0.5
             n_rights = np.zeros(NUM_CELLS)
             n_per_epoche = labels.shape[0]

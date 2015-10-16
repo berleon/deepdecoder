@@ -10,15 +10,19 @@ import itertools
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, UpSample2D
-import os
 import os.path
 
+import base64
+
+import os
+import xml.etree.ElementTree as et
+import io
+import scipy.misc
 from deepdecoder import NUM_CELLS
 import sys
 from keras.optimizers import SGD
 from scipy.misc import imsave
 import numpy as np
-import skimage
 from theano.ifelse import ifelse
 import theano
 import theano.tensor as T
@@ -157,8 +161,8 @@ class MaskLAPGAN(AbstractModel):
 
     @staticmethod
     def bw_mask(mask):
-        bw = T.zeros_like(mask)
-        bw = T.set_subtensor(bw[mask > MASK["IGNORE"]], 1)
+        bw = T.zeros_like(mask, dtype=floatX)
+        bw = T.set_subtensor(bw[(mask > MASK["IGNORE"]).nonzero()], 1.)
         return bw
 
     def compile(self, optimizer_factory, functions=['train', 'generate']):
@@ -178,14 +182,14 @@ class MaskLAPGAN(AbstractModel):
         alfa_d_updates = optimizer_factory().get_updates(
             self.alfa.D.params, self.alfa.D.constraints, alfa_d_loss)
 
-        bravo_gen_images = T.concatenate([alfa_image_up,
-                                          upsample(gaussian_pyr[2])])
+        gauss_16_up = upsample(gaussian_pyr[2])
+        bravo_gen_images = T.concatenate([alfa_image_up, gauss_16_up])
         bravo_losses = self.bravo.losses(
             lapacian_pyr[1],
             gen_conditional=[masks_bw[1], alfa_image_up],
             dis_conditional=[bravo_gen_images])
-
-        bravo_image = self.bravo.g_out + alfa_image_up
+        bravo_laplace = self.bravo.g_out
+        bravo_image = bravo_laplace + alfa_image_up
         bravo_image_up = upsample(bravo_image)
         bravo_g_loss = bravo_losses[0] + mask_loss(masks_idx[1], bravo_image)
         bravo_g_updates = optimizer_factory().get_updates(
@@ -194,12 +198,13 @@ class MaskLAPGAN(AbstractModel):
         bravo_d_updates = optimizer_factory().get_updates(
             self.bravo.D.params, self.bravo.D.constraints, bravo_d_loss)
 
-        charlie_gen_images = T.concatenate([bravo_image_up,
-                                            upsample(gaussian_pyr[1])])
+        gauss_32_up = upsample(gaussian_pyr[1])
+        charlie_gen_images = T.concatenate([bravo_image_up, gauss_32_up])
         charlie_losses = self.charlie.losses(lapacian_pyr[0],
                                     gen_conditional=[masks_bw[2], bravo_image_up],
                                     dis_conditional=[charlie_gen_images])
-        charlie_image = self.charlie.g_out + bravo_image_up
+        charlie_laplace = self.charlie.g_out
+        charlie_image = charlie_laplace + bravo_image_up
 
         charlie_g_loss = charlie_losses[0] + mask_loss(masks_idx[2], charlie_image)
         charlie_g_updates = optimizer_factory().get_updates(
@@ -221,15 +226,22 @@ class MaskLAPGAN(AbstractModel):
                 [charlie_image]
             )
         if 'debug' in functions:
-            self.debug_labels = ["mask_bw_64", "mask_bw_32", "mask_bw_16",
+            self.debug_labels = ["mask_bw_16", "mask_bw_32", "mask_bw_64",
                       "gauss_64", "gauss_32", "gauss_16", "gauss_8",
-                      "laplace_64", "laplace_32", "laplace_16",
+                      "gauss_32_up", "gauss_16_up",
+                      "laplace_64", "laplace_32",
+                      "charlie_laplace", "bravo_laplace",
                       "charlie_img", "bravo_img", "alfa_img",
                       "bravo_img_up", "alfa_img_up"]
 
             self._debug = theano.function(
-                masks_idx,
-                masks_bw + gaussian_pyr + lapacian_pyr + [charlie_image, bravo_image, alfa_image] + [bravo_image_up, alfa_image_up]
+                [x_real] + masks_idx,
+                masks_bw + gaussian_pyr +
+                [gauss_32_up, gauss_16_up] +
+                lapacian_pyr[:2] +
+                [charlie_laplace, bravo_laplace] +
+                [charlie_image, bravo_image, alfa_image] +
+                [bravo_image_up, alfa_image_up]
             )
 
     def fit(self, X, masks_idx, batch_size=128, nb_epoch=100, verbose=0,
@@ -271,6 +283,10 @@ class MaskLAPGAN(AbstractModel):
 
     def generate(self, *conditional):
         return self._generate(*conditional)[0]
+
+    def debug(self, X, masks_idx):
+        inputs = [X] + masks_idx
+        return self._debug(*inputs)
 
 
 def np_bw_mask(mask_idx):
@@ -314,6 +330,42 @@ def train(args):
     lapgan.save_weights("data/lapgan_{}_{}.hdf5", overwrite=True)
 
 
+def draw(args):
+    def encode64_png(np_array):
+        output = io.BytesIO()
+        scipy.misc.toimage(np_array).save(output, format='PNG')
+        return base64.b64encode(output.getvalue())
+
+    def make_image(elem: et.Element, np_array):
+        elem.tag = 'image'
+        arr_base64 = encode64_png(np_array)
+        elem.set('xlink:href', "data:image/png;base64," +
+                 arr_base64.decode('utf-8'))
+
+    with open('lapgan.svg') as f:
+        tree = et.parse(f)
+    lapgan = MaskLAPGAN()
+
+    X = tags_from_hdf5("/home/leon/uni/vision_swp/deeplocalizer_data/gan_data/gan/gan_0.hdf5")
+    X /= 255.
+
+    print("Compiling...")
+    lapgan.compile(lambda: SGD(lr=0.02), functions=['debug'])
+    print("Done Compiling")
+
+    masks_idx = next(masks(64))
+    outputs = lapgan.debug(X[:128], masks_idx)
+    labels = lapgan.debug_labels
+    for elem in tree.iter():
+        id = elem.get('id')
+        if id is not None:
+            id = id.split("XXX")[0]
+        if id in labels:
+            index = labels.index(id)
+            make_image(elem, outputs[index][3, 0])
+    tree.write("py_lapgan.svg")
+
+
 def test(args):
     lapgan = MaskLAPGAN()
     lapgan.load_weights("lapgan_{}_{}.hdf5")
@@ -332,4 +384,7 @@ def test(args):
 
 if __name__ == "__main__":
     argparse = NetworkArgparser(train, test)
+    parser_draw = argparse.subparsers.add_parser(
+        "draw", help="draw the lapgan network")
+    parser_draw.set_defaults(func=draw)
     argparse.parse_args()
