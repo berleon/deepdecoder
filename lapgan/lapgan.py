@@ -168,7 +168,12 @@ class MaskLAPGAN(AbstractModel):
         bw = T.set_subtensor(bw[(mask > MASK["IGNORE"]).nonzero()], 1.)
         return bw
 
-    def compile(self, optimizer_factory, functions=['train', 'generate']):
+    def compile(self, optimizer_factory, functions=None):
+        if functions is None:
+            functions = ['train', 'generate']
+        if functions == "all":
+            functions = ['train', 'generate', 'debug']
+        print(functions)
         masks_idx = [T.tensor4("{}_mask_idx".format(name)) for name in self.names]
 
         masks_bw = [self.bw_mask(m) for m in masks_idx]
