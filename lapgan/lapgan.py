@@ -38,13 +38,13 @@ floatX = theano.config.floatX
 
 
 def mask_loss(mask_image, image):
-    white_mean = T.mean(image[(mask_image > MASK["IGNORE"]).nonzero()])
-    black_mean = T.mean(image[(mask_image < MASK["IGNORE"]).nonzero()])
-    loss = T.maximum(black_mean - white_mean, 0.)
+    white_mean = T.mean(image[(mask_image > MASK["IGNORE"]).nonzero()], axis=0)
+    black_mean = T.mean(image[(mask_image < MASK["IGNORE"]).nonzero()], axis=0)
+    loss = 5*T.maximum(black_mean - white_mean + 0.1, 0.)
     cell_weight = 1. / (len(MASK_BLACK) + len(MASK_WHITE) - NUM_CELLS - 1)
     for key in MASK_BLACK:
         cell_indicies = T.eq(mask_image, MASK[key]).nonzero()
-        cell_mean = T.mean(image[cell_indicies])
+        cell_mean = T.mean(image[cell_indicies], axis=0)
         loss += ifelse(T.isnan(cell_mean),
                             # then
                             np.float64(0.),
@@ -60,7 +60,7 @@ def mask_loss(mask_image, image):
                             np.float64(0.),
                             # else
                             cell_weight * T.maximum(black_mean - cell_mean, 0.))
-    return loss
+    return T.mean(loss)
 
 batch_size = 128
 
