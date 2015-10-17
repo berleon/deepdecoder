@@ -1,7 +1,9 @@
 #! /usr/bin/env python3
+
 from beras.gan import GAN, stack_laplacian_gans, upsample
 from beras.models import AbstractModel
 from beras.util import downsample
+import cairosvg
 from deepdecoder.generate_grids import BlackWhiteArtist, MASK, MASK_BLACK, \
     MASK_WHITE, GridGenerator, MaskGridArtist
 import deepdecoder.generate_grids as gen_grids
@@ -288,11 +290,62 @@ class MaskLAPGAN(AbstractModel):
         inputs = [X] + masks_idx
         return self._debug(*inputs)
 
+    def debug_and_draw(self, X, masks_idx, output_dir, show_notebook=False,
+                       n=None):
+        def encode64_png(np_array):
+            output = io.BytesIO()
+            scipy.misc.toimage(np_array).save(output, format='PNG')
+            return base64.b64encode(output.getvalue())
 
-def np_bw_mask(mask_idx):
-    bw = np.zeros_like(mask_idx)
-    bw[mask_idx > MASK["IGNORE"]] = 1
-    return bw
+        def make_image(elem: et.Element, np_array):
+            elem.tag = '{http://www.w3.org/2000/svg}image'
+            arr_base64 = encode64_png(np_array)
+            elem.set('{http://www.w3.org/1999/xlink}href', "data:image/png;base64," +
+                     arr_base64.decode('utf-8'))
+
+        def set_text(elem: et.Element, text):
+            children = list(elem)
+            for c in children:
+                elem.remove(c)
+            elem.text = str(text[0])
+
+        if n is None:
+            n = len(X)
+
+        outputs = self.debug(X, masks_idx)
+        output_dict = dict(zip(self.debug_labels, outputs))
+        d_out_real = {"d64_real": "charlie_d",
+                      "d32_real": "bravo_d",
+                      "d16_real": "alfa_d"}
+        d_out_fake = {"d64_fake": "charlie_d",
+                      "d32_fake": "bravo_d",
+                      "d16_fake": "alfa_d"}
+
+        for i in range(n):
+            with open('lapgan.svg') as f:
+                tree = et.parse(f)
+
+            labels = self.debug_labels
+            for elem in tree.iter():
+                id = elem.get('id')
+                if id is not None:
+                    id = id.split("XXX")[0]
+                if id in labels:
+                    index = labels.index(id)
+                    make_image(elem, outputs[index][i, 0])
+                if id in list(d_out_real.keys()):
+                    index = labels.index(d_out_real[id])
+                    set_text(elem, outputs[index][i])
+                if id in list(d_out_fake.keys()):
+                    index = labels.index(d_out_fake[id])
+                    set_text(elem, outputs[index][i+self.batch_size//2])
+
+            svg_code = et.tostring(tree.getroot())
+            fname = output_dir + "/{}.png".format(i)
+            cairosvg.svg2png(bytestring=svg_code, write_to=fname)
+            if show_notebook:
+                import IPython.display
+                IPython.display.Image(filename=fname)
 
 
 def masks(batch_size):
@@ -331,39 +384,21 @@ def train(args):
 
 
 def draw(args):
-    def encode64_png(np_array):
-        output = io.BytesIO()
-        scipy.misc.toimage(np_array).save(output, format='PNG')
-        return base64.b64encode(output.getvalue())
-
-    def make_image(elem: et.Element, np_array):
-        elem.tag = '{http://www.w3.org/2000/svg}image'
-        arr_base64 = encode64_png(np_array)
-        elem.set('{http://www.w3.org/1999/xlink}href', "data:image/png;base64," +
-                 arr_base64.decode('utf-8'))
-
     with open('lapgan.svg') as f:
         tree = et.parse(f)
     lapgan = MaskLAPGAN()
 
     X = tags_from_hdf5("/home/leon/uni/vision_swp/deeplocalizer_data/gan_data/gan/gan_0.hdf5")
     X /= 255.
+    masks_idx = next(masks(64))
 
     print("Compiling...")
     lapgan.compile(lambda: SGD(lr=0.02), functions=['debug'])
     print("Done Compiling")
 
-    masks_idx = next(masks(64))
-    outputs = lapgan.debug(X[:128], masks_idx)
-    labels = lapgan.debug_labels
-    for elem in tree.iter():
-        id = elem.get('id')
-        if id is not None:
-            id = id.split("XXX")[0]
-        if id in labels:
-            index = labels.index(id)
-            make_image(elem, outputs[index][3, 0])
-    tree.write("py_lapgan.svg")
+    output_dir = "data/lapgan_begin/"
+    os.makedirs(output_dir, exist_ok=True)
+    lapgan.debug_and_draw(X[:128], masks_idx, output_dir, n=10)
 
 
 def test(args):
