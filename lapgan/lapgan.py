@@ -239,7 +239,8 @@ class MaskLAPGAN(AbstractModel):
                       "laplace_64", "laplace_32",
                       "charlie_laplace", "bravo_laplace",
                       "charlie_img", "bravo_img", "alfa_img",
-                      "bravo_img_up", "alfa_img_up"]
+                      "bravo_img_up", "alfa_img_up",
+                      "charlie_d", "bravo_d", "alfa_d"]
 
             self._debug = theano.function(
                 [x_real] + masks_idx,
@@ -248,7 +249,8 @@ class MaskLAPGAN(AbstractModel):
                 lapacian_pyr[:2] +
                 [charlie_laplace, bravo_laplace] +
                 [charlie_image, bravo_image, alfa_image] +
-                [bravo_image_up, alfa_image_up]
+                [bravo_image_up, alfa_image_up] +
+                [self.charlie.d_out, self.bravo.d_out, self.alfa.d_out]
             )
 
     def fit(self, X, masks_idx, nb_epoch=100, verbose=0,
