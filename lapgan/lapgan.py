@@ -160,6 +160,7 @@ class MaskLAPGAN(AbstractModel):
         self.bravo = get_bravo()
         self.charlie = get_charlie()
         self.gans = [self.alfa, self.bravo, self.charlie]
+        self.batch_size = 128
 
     @staticmethod
     def bw_mask(mask):
@@ -250,7 +251,7 @@ class MaskLAPGAN(AbstractModel):
                 [bravo_image_up, alfa_image_up]
             )
 
-    def fit(self, X, masks_idx, batch_size=128, nb_epoch=100, verbose=0,
+    def fit(self, X, masks_idx, nb_epoch=100, verbose=0,
             callbacks=None,  shuffle=True):
         if callbacks is None:
             callbacks = []
@@ -261,16 +262,16 @@ class MaskLAPGAN(AbstractModel):
             if batch_logs is None:
                 batch_logs = {}
 
-            b = batch_index*batch_size//2
-            e = (batch_index+1)*batch_size//2
+            b = batch_index*self.batch_size//2
+            e = (batch_index+1)*self.batch_size//2
             masks_idx_batch = [m[b:e] for m in masks_idx]
             inputs = [X[batch_ids]] + masks_idx_batch
             outs = self._train_fn(*inputs)
             for key, value in zip(labels, outs):
                 batch_logs[key] = value
 
-        assert batch_size % 2 == 0, "batch_size must be multiple of two."
-        self._fit(train, len(X), batch_size=batch_size, nb_epoch=nb_epoch,
+        assert self.batch_size % 2 == 0, "batch_size must be multiple of two."
+        self._fit(train, len(X), batch_size=self.batch_size//2, nb_epoch=nb_epoch,
                   verbose=verbose, callbacks=callbacks, shuffle=shuffle, metrics=labels)
 
     def print_svg(self):
@@ -353,6 +354,7 @@ class MaskLAPGAN(AbstractModel):
 
 
 def masks(batch_size):
+    batch_size += 64 - (batch_size % 64)
     generator = GridGenerator()
     artist = MaskGridArtist()
     for masks in gen_grids.batches(batch_size, generator, artist=artist,
