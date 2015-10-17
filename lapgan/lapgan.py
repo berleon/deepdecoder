@@ -177,7 +177,8 @@ class MaskLAPGAN(AbstractModel):
         alfa_losses = self.alfa.losses(gaussian_pyr[2], gen_conditional=[masks_bw[0]])
         alfa_image = self.alfa.g_out
         alfa_image_up = upsample(alfa_image)
-        alfa_g_loss = alfa_losses[0] + mask_loss(masks_idx[0], alfa_image)
+        alfa_mask_loss = mask_loss(masks_idx[0], alfa_image)
+        alfa_g_loss = alfa_mask_loss + alfa_losses[0]
         alfa_g_updates = optimizer_factory().get_updates(
             self.alfa.G.params, self.alfa.G.constraints, alfa_g_loss)
         alfa_d_loss = alfa_losses[1]
@@ -193,7 +194,8 @@ class MaskLAPGAN(AbstractModel):
         bravo_laplace = self.bravo.g_out
         bravo_image = bravo_laplace + alfa_image_up
         bravo_image_up = upsample(bravo_image)
-        bravo_g_loss = bravo_losses[0] + mask_loss(masks_idx[1], bravo_image)
+        bravo_mask_loss = mask_loss(masks_idx[1], bravo_image)
+        bravo_g_loss = bravo_mask_loss + bravo_losses[0]
         bravo_g_updates = optimizer_factory().get_updates(
             self.bravo.G.params, self.bravo.G.constraints, bravo_g_loss)
         bravo_d_loss = bravo_losses[1]
@@ -207,8 +209,8 @@ class MaskLAPGAN(AbstractModel):
                                     dis_conditional=[charlie_gen_images])
         charlie_laplace = self.charlie.g_out
         charlie_image = charlie_laplace + bravo_image_up
-
-        charlie_g_loss = charlie_losses[0] + mask_loss(masks_idx[2], charlie_image)
+        charlie_mask_loss = mask_loss(masks_idx[2], charlie_image)
+        charlie_g_loss = charlie_mask_loss + charlie_losses[0]
         charlie_g_updates = optimizer_factory().get_updates(
             self.charlie.G.params, self.charlie.G.constraints, charlie_g_loss)
         charlie_d_loss = charlie_losses[1]
@@ -218,7 +220,9 @@ class MaskLAPGAN(AbstractModel):
         if 'train' in functions:
             self._train_fn = theano.function(
                 [x_real] + masks_idx,
-                alfa_losses + bravo_losses + charlie_losses,
+                alfa_losses + (alfa_mask_loss, alfa_g_loss) +
+                bravo_losses + (bravo_mask_loss, bravo_g_loss) +
+                charlie_losses + (charlie_mask_loss, charlie_g_loss),
                 updates=alfa_g_updates + alfa_d_updates + bravo_g_updates +
                     bravo_d_updates + charlie_g_updates + charlie_d_updates)
 
@@ -250,8 +254,8 @@ class MaskLAPGAN(AbstractModel):
             callbacks=None,  shuffle=True):
         if callbacks is None:
             callbacks = []
-        losses = ['{}_d_loss', '{}_d_real', '{}_d_gen', '{}_g_loss']
-        labels = [loss.format(name) for name in self.names for loss in losses]
+        losses = ['{}_g_on_d', '{}_d', '{}_d_real', '{}_d_gen', "{}_m", "{}_g"]
+        labels = [l.format(n[:1]) for n in self.names for l in losses]
 
         def train(model, batch_ids, batch_index, batch_logs=None):
             if batch_logs is None:
