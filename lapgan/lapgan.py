@@ -337,9 +337,9 @@ def draw(args):
         return base64.b64encode(output.getvalue())
 
     def make_image(elem: et.Element, np_array):
-        elem.tag = 'image'
+        elem.tag = '{http://www.w3.org/2000/svg}image'
         arr_base64 = encode64_png(np_array)
-        elem.set('xlink:href', "data:image/png;base64," +
+        elem.set('{http://www.w3.org/1999/xlink}href', "data:image/png;base64," +
                  arr_base64.decode('utf-8'))
 
     with open('lapgan.svg') as f:
