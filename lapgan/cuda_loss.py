@@ -99,8 +99,6 @@ class SplitMaskGrad(theano.Op):
         image_mask_split_grad = mod.get_function(self.function_name)
 
         def thunk():
-            for i in inputs:
-                print("{}: {}".format(i, i[0].shape))
             grad = outputs[0][0]
             mask_idx = inputs[0][0]
             batch_size = mask_idx.shape[0]
@@ -193,7 +191,6 @@ class SplitMask(theano.Op):
             connected.append("sum")
         if str(output_gradients[1]) != "<DisconnectedType>":
             connected.append("pow")
-        print(connected)
         return [T.zeros_like(inputs[0]), SplitMaskGrad(connected)(*grad_ins)]
 
 
