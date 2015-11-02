@@ -16,7 +16,7 @@ from deepdecoder.pydeepdecoder import GridGenerator, MaskGridArtist
 import theano
 import theano.tests.unittest_tools
 import theano.tensor as T
-from lapgan.cuda_loss import cuda_split_mask, theano_split_mask
+from lapgan.cuda_loss import cuda_split_mask, theano_split_mask, mask_loss
 import deepdecoder.generate_grids as gen_grids
 from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE
 import numpy as np
@@ -97,6 +97,7 @@ def test_cuda_theano_mask_split_sum_equal():
     for c, t in zip(cuda_split, theano_split):
         np.testing.assert_allclose(c.eval(), t.eval(), rtol=1e-5)
 
+
 def test_cuda_mask_split_call_grad():
     th_mask = T.tensor4()
     th_img = T.tensor4()
@@ -122,3 +123,27 @@ def test_theano_split_mask():
     t = Timer(lambda: sum_fn(mask_idx, image))
     n = 10
     print(t.timeit(number=n) / n)
+
+
+def test_mask_loss():
+
+    th_mask, th_img = T.tensor4(), T.tensor4()
+    cuda_mask_loss = theano.function([th_mask, th_img],
+                                     mask_loss(th_mask, th_img, impl='cuda'))
+
+    theano_mask_loss = theano.function([th_mask, th_img],
+                                       mask_loss(th_mask, th_img, impl='theano'))
+    mask_idx = next(masks(1))
+    image_ok = np.zeros_like(mask_idx)
+    image_ok[mask_idx > MASK["IGNORE"]] = 1
+
+    assert (cuda_mask_loss(mask_idx, image_ok)[1] == 0).all()
+    assert (theano_mask_loss(mask_idx, image_ok)[1] == 0).all()
+
+    t = Timer(lambda: cuda_mask_loss(mask_idx, image_ok))
+    n = 10
+    print("cuda implementation: {}".format(t.timeit(number=n) / n))
+
+    t = Timer(lambda: theano_mask_loss(mask_idx, image_ok))
+    print("theano implementation: {}".format(t.timeit(number=n) / n))
+

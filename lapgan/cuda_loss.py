@@ -23,6 +23,7 @@ import pycuda.autoinit
 from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE
 
 import numpy as np
+import sys
 import theano
 import theano.tensor as T
 from theano.misc.pycuda_utils import to_gpuarray, to_cudandarray
@@ -214,65 +215,58 @@ def theano_split_mask(mask_idx, image):
     return splitted, splitted**2, count.reshape((len(MASK), shp[0], 1, 1, 1), ndim=5)
 
 
+def split_to_mean_var(sum, pow, count):
+    axis = [2, 3, 4]
+    count_sum = count.sum(axis)
 
-def theano_mask_loss(mask_image, image):
-    axis = [1, 2, 3]
+    def divide_by_count(x):
+        return T.switch(T.eq(count_sum, 0),
+                        T.zeros_like(count_sum),
+                        x.sum(axis) / count_sum)
 
-    def get_subtensor_var(image, mean, idx):
-        mean = T.patternbroadcast(mean.reshape((-1, 1, 1, 1)), [False, True, True, True])
-        tmp_image = T.zeros_like(image)
-        tmp_image = T.set_subtensor(tmp_image[idx.nonzero()], image[idx.nonzero()])
-        return get_subtensor_mean((tmp_image - mean)**2, idx)
+    mean = divide_by_count(sum)
+    return mean, divide_by_count(pow) - mean**2, count_sum
 
-    def get_subtensor_sum(image, idx):
-        tmp_image = T.zeros_like(image)
-        tmp_image = T.set_subtensor(tmp_image[idx.nonzero()], image[idx.nonzero()])
-        return T.sum(tmp_image, axis)
 
-    def get_subtensor_mean(image, idx):
-        return get_subtensor_sum(image, idx) / T.sum(idx, axis)
+def mask_loss(mask_image, image, impl='auto'):
+    if (impl == 'auto' and theano.config.device.startswith("gpu")) \
+            or impl == "cuda":
+        split_fn = cuda_split_mask
+    else:
+        if theano.config.device.startswith("gpu"):
+            print("Warning: Possible very slow. GPU is avialable but still "
+                  "computing mask_loss on the CPU", file=sys.stderr)
+        split_fn = theano_split_mask
 
-    white_mean = get_subtensor_mean(image, mask_image > MASK["IGNORE"])
-    black_mean = get_subtensor_mean(image, mask_image < MASK["IGNORE"])
+    def slice_mean(slice):
+        return (mean[slice]*count[slice]).sum(axis=0) / count[slice].sum(axis=0)
+
+    mean, var, count = split_to_mean_var(*split_fn(mask_image, image))
+    mask_keys = list(MASK.keys())
+    ignore_idx = mask_keys.index("IGNORE")
+    background_ring_idx = mask_keys.index("BACKGROUND_RING")
+    black_mean = slice_mean(slice(0, ignore_idx))
+    white_mean = slice_mean(slice(ignore_idx+1, None))
     min_distance = 0.25 * T.ones_like(black_mean)
     distance = T.minimum(white_mean - black_mean, min_distance)
     loss = (distance - min_distance)**2
     cell_loss = T.zeros_like(loss)
 
     def cell_loss_fn(mask_color, color_mean):
-        cell_idx = T.eq(mask_image, MASK[mask_color])
-        cell_mean = get_subtensor_mean(image, cell_idx)
-        cell_weight = T.sum(cell_idx, axis)
-        return T.switch(T.isnan(cell_mean),
-                         T.zeros_like(black_mean),
-                         cell_weight * (
-                             (color_mean - cell_mean)**2 +
-                             4*get_subtensor_var(image, color_mean, cell_idx)
-                         ))
+        cell_idx = mask_keys.index(mask_color)
+        cell_mean = mean[cell_idx]
+        cell_weight = 1  # count[cell_idx].sum()
+        return T.switch(T.eq(count[cell_idx], 0),
+                        T.zeros_like(black_mean),
+                        cell_weight * (
+                            (color_mean - cell_mean)**2  #+ 4*var[cell_idx]
+                        ))
     for black_parts in MASK_BLACK:
         cell_loss += cell_loss_fn(black_parts, black_mean)
     for white_parts in MASK_WHITE:
         cell_loss += cell_loss_fn(white_parts, white_mean)
 
-    cell_loss /= T.sum(T.neq(mask_image, MASK["IGNORE"]))
+    cell_loss /= count[:background_ring_idx].sum() + count[ignore_idx+1:].sum()
     loss += cell_loss
     return 50*T.mean(loss), 50*loss
-
-
-def cuda_mask_loss(mask, image):
-    raw_sum, raw_pow, raw_count = cuda_split_mask(mask, image)
-    mask_sum = T.sum(raw_sum, axis=[2, 3, 4])
-    mask_pow = T.sum(raw_pow, axis=[2, 3, 4])
-    mask_count = T.sum(raw_count, axis=[2, 3, 4])
-
-    mean = T.switch(T.eq(mask_count, 0),
-                    T.zeros_like(mask_sum),
-                    mask_sum / mask_count)
-    var = T.switch(T.eq(mask_count, 0),
-                   T.zeros_like(mask_sum),
-                   mask_pow / mask_count - mean**2)
-
-
-
-
 
