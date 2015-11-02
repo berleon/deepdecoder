@@ -14,13 +14,13 @@
 from __future__ import print_function
 from __future__ import absolute_import
 import os
+import math
 import pycuda.driver as pycu
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 import pycuda.autoinit
 
-from deepdecoder.generate_grids import MASK
-
+from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE
 
 import numpy as np
 import theano
@@ -98,37 +98,40 @@ class SplitMaskGrad(theano.Op):
         image_mask_split_grad = mod.get_function(self.function_name)
 
         def thunk():
+            for i in inputs:
+                print("{}: {}".format(i, i[0].shape))
             grad = outputs[0][0]
             mask_idx = inputs[0][0]
             batch_size = mask_idx.shape[0]
             assert shape_ok(mask_idx.shape)
             s = mask_idx.shape[3]
-            sh = s // 2
-            mask_idx = to_gpuarray(mask_idx)
+            sh = min(32, s)
+            g = math.ceil(s / 32)
+            mask_idx = to_gpuarray(mask_idx, copyif=True)
 
             image = inputs[1][0]
             assert shape_ok(image.shape)
-            image = to_gpuarray(image)
+            image = to_gpuarray(image, copyif=True)
 
             grad_shape = (batch_size, 1, s, s)
             grad = pycuda_zeros(grad, grad_shape)
-            grid = (batch_size, 1, 1)
+            grid = (batch_size, g, g)
             block = (sh, sh, 1)
             if "sum" in self.connected and "pow" in self.connected:
-                og_sum = to_gpuarray(inputs[2][0])
-                og_pow = to_gpuarray(inputs[3][0])
+                og_sum = to_gpuarray(inputs[2][0], copyif=True)
+                og_pow = to_gpuarray(inputs[3][0], copyif=True)
                 image_mask_split_grad(
                     mask_idx, image, og_sum, og_pow,
                     np.int32(batch_size), np.int32(s), grad,
                     block=block, grid=grid)
             elif "sum" in self.connected:
-                og_sum = to_gpuarray(inputs[2][0])
+                og_sum = to_gpuarray(inputs[2][0], copyif=True)
                 image_mask_split_grad(
                     mask_idx, image, og_sum,
                     np.int32(batch_size), np.int32(s), grad,
                     block=block, grid=grid)
             elif "pow" in self.connected:
-                og_pow = to_gpuarray(inputs[2][0])
+                og_pow = to_gpuarray(inputs[2][0], copyif=True)
                 image_mask_split_grad(
                     mask_idx, image, og_pow,
                     np.int32(batch_size), np.int32(s), grad,
@@ -189,8 +192,87 @@ class SplitMask(theano.Op):
             connected.append("sum")
         if str(output_gradients[1]) != "<DisconnectedType>":
             connected.append("pow")
-
+        print(connected)
         return [T.zeros_like(inputs[0]), SplitMaskGrad(connected)(*grad_ins)]
 
 
 cuda_split_mask = SplitMask()
+
+
+def theano_split_mask(mask_idx, image):
+    shp = image.shape
+    count = T.zeros((len(MASK), shp[0]))
+    splitted_list = []
+    for i, (name, enum_val) in enumerate(MASK.items()):
+        idx = T.eq(mask_idx, enum_val)
+        count = T.set_subtensor(count[i], idx.sum(axis=(1, 2, 3)))
+        tmp_image = T.zeros_like(image)
+        tmp_image = T.set_subtensor(tmp_image[idx.nonzero()],
+                                    image[idx.nonzero()])
+        splitted_list.append(tmp_image)
+    splitted = T.stack(splitted_list)
+    return splitted, splitted**2, count.reshape((len(MASK), shp[0], 1, 1, 1), ndim=5)
+
+
+
+def theano_mask_loss(mask_image, image):
+    axis = [1, 2, 3]
+
+    def get_subtensor_var(image, mean, idx):
+        mean = T.patternbroadcast(mean.reshape((-1, 1, 1, 1)), [False, True, True, True])
+        tmp_image = T.zeros_like(image)
+        tmp_image = T.set_subtensor(tmp_image[idx.nonzero()], image[idx.nonzero()])
+        return get_subtensor_mean((tmp_image - mean)**2, idx)
+
+    def get_subtensor_sum(image, idx):
+        tmp_image = T.zeros_like(image)
+        tmp_image = T.set_subtensor(tmp_image[idx.nonzero()], image[idx.nonzero()])
+        return T.sum(tmp_image, axis)
+
+    def get_subtensor_mean(image, idx):
+        return get_subtensor_sum(image, idx) / T.sum(idx, axis)
+
+    white_mean = get_subtensor_mean(image, mask_image > MASK["IGNORE"])
+    black_mean = get_subtensor_mean(image, mask_image < MASK["IGNORE"])
+    min_distance = 0.25 * T.ones_like(black_mean)
+    distance = T.minimum(white_mean - black_mean, min_distance)
+    loss = (distance - min_distance)**2
+    cell_loss = T.zeros_like(loss)
+
+    def cell_loss_fn(mask_color, color_mean):
+        cell_idx = T.eq(mask_image, MASK[mask_color])
+        cell_mean = get_subtensor_mean(image, cell_idx)
+        cell_weight = T.sum(cell_idx, axis)
+        return T.switch(T.isnan(cell_mean),
+                         T.zeros_like(black_mean),
+                         cell_weight * (
+                             (color_mean - cell_mean)**2 +
+                             4*get_subtensor_var(image, color_mean, cell_idx)
+                         ))
+    for black_parts in MASK_BLACK:
+        cell_loss += cell_loss_fn(black_parts, black_mean)
+    for white_parts in MASK_WHITE:
+        cell_loss += cell_loss_fn(white_parts, white_mean)
+
+    cell_loss /= T.sum(T.neq(mask_image, MASK["IGNORE"]))
+    loss += cell_loss
+    return 50*T.mean(loss), 50*loss
+
+
+def cuda_mask_loss(mask, image):
+    raw_sum, raw_pow, raw_count = cuda_split_mask(mask, image)
+    mask_sum = T.sum(raw_sum, axis=[2, 3, 4])
+    mask_pow = T.sum(raw_pow, axis=[2, 3, 4])
+    mask_count = T.sum(raw_count, axis=[2, 3, 4])
+
+    mean = T.switch(T.eq(mask_count, 0),
+                    T.zeros_like(mask_sum),
+                    mask_sum / mask_count)
+    var = T.switch(T.eq(mask_count, 0),
+                   T.zeros_like(mask_sum),
+                   mask_pow / mask_count - mean**2)
+
+
+
+
+

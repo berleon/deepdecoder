@@ -1,6 +1,6 @@
 // Kernel definition
 
-#define MASK_LEN 28
+#define MASK_LEN 29
 #define WARP_SIZE 32
 
 
@@ -19,6 +19,7 @@ enum MASK {
     CELL_9_BLACK,
     CELL_10_BLACK,
     CELL_11_BLACK,
+    BACKGROUND_RING,
     IGNORE = 128,
     CELL_0_WHITE = IGNORE + 1,
     CELL_1_WHITE = IGNORE + 2,
@@ -38,7 +39,7 @@ enum MASK {
 __device__ const int MASKS_INDICIES[]= {
     INNER_BLACK_SEMICIRCLE, CELL_0_BLACK, CELL_1_BLACK, CELL_2_BLACK, CELL_3_BLACK,
     CELL_4_BLACK, CELL_5_BLACK, CELL_6_BLACK, CELL_7_BLACK, CELL_8_BLACK, CELL_9_BLACK,
-    CELL_10_BLACK, CELL_11_BLACK, IGNORE, CELL_0_WHITE, CELL_1_WHITE, CELL_2_WHITE,
+    CELL_10_BLACK, CELL_11_BLACK, BACKGROUND_RING, IGNORE, CELL_0_WHITE, CELL_1_WHITE, CELL_2_WHITE,
     CELL_3_WHITE, CELL_4_WHITE, CELL_5_WHITE, CELL_6_WHITE, CELL_7_WHITE, CELL_8_WHITE,
     CELL_9_WHITE, CELL_10_WHITE, CELL_11_WHITE, OUTER_WHITE_RING, INNER_WHITE_SEMICIRCLE
 };
@@ -63,34 +64,33 @@ __device__ inline void tmpl_image_mask_split_grad(const float * mask, const floa
                                  const float * out_grad_sum, const float * out_grad_pow,
                                  const int bs, const int N, float * grad)
 {
+    const int b = blockIdx.x;
+
     const int block_r = blockIdx.y * blockDim.y;
     const int block_c = blockIdx.z * blockDim.z;
-    const int sr = block_r + threadIdx.y;
-    const int sc = block_c + threadIdx.x;
+    const int r = block_r + threadIdx.y;
+    const int c = block_c + threadIdx.x;
+    const int sr = r/2;
+    const int sc = c/2;
 
-    const int b = blockIdx.x;
-    const int r = 2*sr;
-    const int c = 2*sc;
     const int N2 = N/2;
     const int s_idx_base = index4(bs, N2, N2, 0, b, sr, sc);
     const int next_mask_offset = bs*N2*N2;
     const int index = index3(N, N, b, r, c);
-    if (b < bs && r + 1 < N && c + 1 < N && sr < N2 && sc < N2) {
-        if (index < bs*N*N) {
-            float mySum = 0;
-            for(int i = 0; i < MASK_LEN; i++) {
-                const int s_idx = s_idx_base + i*next_mask_offset;
-                if(mask[index] == MASKS_INDICIES[i]) {
-                    if(sum_grad_provided) {
-                        mySum += out_grad_sum[s_idx];
-                    }
-                    if (pow_grad_provided) {
-                        mySum += 2*image[index]*out_grad_pow[s_idx];
-                    }
+    if (b < bs && r < N && c < N && sr < N2 && sc < N2 && index < bs*N*N) {
+        float mySum = 0;
+        for(int i = 0; i < MASK_LEN; i++) {
+            const int s_idx = s_idx_base + i*next_mask_offset;
+            if(mask[index] == MASKS_INDICIES[i]) {
+                if(sum_grad_provided) {
+                    mySum += out_grad_sum[s_idx];
+                }
+                if (pow_grad_provided) {
+                    mySum += 2*image[index]*out_grad_pow[s_idx];
                 }
             }
-            grad[index] = mySum;
         }
+        grad[index] = mySum;
     }
 }
 
