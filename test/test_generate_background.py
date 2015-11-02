@@ -15,14 +15,14 @@ import math
 import numpy as np
 import skimage.io
 from skimage import draw
-from ..generate_background import BackgroundGenerator
 from deepdecoder.generate_grids import batches, GridGenerator
+from generate_background import BackgroundGenerator
 
 
 def test_generate_background():
     rows, cols = 25, 25
-    size = 60
-    big_image = np.zeros((rows * 60 + rows - 1, cols * 60 + cols - 1),
+    size = 64
+    big_image = np.zeros((rows * size + rows - 1, cols * size + cols - 1),
                          dtype=np.uint8)
 
     grid_gen = GridGenerator()
@@ -36,7 +36,7 @@ def test_generate_background():
         for c in range(cols):
             i = r*rows + c
             off_y = c*size + c
-            arr = np.zeros((60, 60), dtype=np.uint8)
+            arr = np.zeros((size, size), dtype=np.uint8)
             z_angle = grid_params[i, 0]
             bg_gen.draw(arr, z_angle)
             defined = grids[i, 0] != 0
