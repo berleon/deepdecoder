@@ -241,22 +241,27 @@ def mask_loss(mask_image, image, impl='auto'):
     mean, var, count = split_to_mean_var(*split_fn(mask_image, image))
     mask_keys = list(MASK.keys())
     ignore_idx = mask_keys.index("IGNORE")
-    background_ring_idx = mask_keys.index("BACKGROUND_RING")
     black_mean = slice_mean(slice(0, ignore_idx))
     white_mean = slice_mean(slice(ignore_idx+1, None))
     min_distance = 0.25 * T.ones_like(black_mean)
-    distance = T.minimum(white_mean - black_mean, min_distance)
-    loss = (distance - min_distance)**2
+    mean_distance = T.minimum(white_mean - black_mean, min_distance)
+    loss = (mean_distance - min_distance)**2
+
+    background_ring_idx = mask_keys.index("BACKGROUND_RING")
+    outer_white_ring_idx = mask_keys.index("OUTER_WHITE_RING")
+    ring_distance = T.minimum(mean[outer_white_ring_idx] - mean[background_ring_idx], min_distance)
+    loss += (ring_distance - min_distance)**2
+
     cell_loss = T.zeros_like(loss)
 
     def cell_loss_fn(mask_color, color_mean):
         cell_idx = mask_keys.index(mask_color)
         cell_mean = mean[cell_idx]
-        cell_weight = 1  # count[cell_idx].sum()
+        cell_weight = count[cell_idx].sum()
         return T.switch(T.eq(count[cell_idx], 0),
                         T.zeros_like(black_mean),
                         cell_weight * (
-                            (color_mean - cell_mean)**2  #+ 4*var[cell_idx]
+                            (color_mean - cell_mean)**2 + 4*var[cell_idx]
                         ))
     for black_parts in MASK_BLACK:
         cell_loss += cell_loss_fn(black_parts, black_mean)
