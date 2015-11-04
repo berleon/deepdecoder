@@ -101,21 +101,21 @@ class SplitMaskGrad(theano.Op):
         def thunk():
             grad = outputs[0][0]
             mask_idx = inputs[0][0]
-            batch_size = mask_idx.shape[0]
             assert shape_ok(mask_idx.shape)
             s = mask_idx.shape[3]
-            sh = min(32, s)
-            g = math.ceil(s / 32)
+            block_dim = min(32, s)
+            grid_dim = math.ceil(s / block_dim)
             mask_idx = to_gpuarray(mask_idx, copyif=True)
 
             image = inputs[1][0]
             assert shape_ok(image.shape)
             image = to_gpuarray(image, copyif=True)
 
+            batch_size = min(mask_idx.shape[0], image.shape[0])
             grad_shape = (batch_size, 1, s, s)
             grad = pycuda_zeros(grad, grad_shape)
-            grid = (batch_size, g, g)
-            block = (sh, sh, 1)
+            grid = (batch_size, grid_dim, grid_dim)
+            block = (1, block_dim, block_dim)
             if "sum" in self.connected and "pow" in self.connected:
                 og_sum = to_gpuarray(inputs[2][0], copyif=True)
                 og_pow = to_gpuarray(inputs[3][0], copyif=True)
@@ -162,17 +162,18 @@ class SplitMask(theano.Op):
         def thunk():
             mask_idx = inputs[0][0]
             image = inputs[1][0]
-            batch_size = mask_idx.shape[0]
+            batch_size = min(mask_idx.shape[0], image.shape[0])
             assert shape_ok(mask_idx.shape)
             assert shape_ok(image.shape)
             mask_idx = to_gpuarray(mask_idx)
             image = to_gpuarray(image)
             s = mask_idx.shape[3]
+            assert s <= 64, "size greater 64 is not supported"
             sh = s // 2
             sdata_shape = (3*len(MASK), batch_size, 1, sh, sh)
             self._sdata = pycuda_zeros(self._sdata, sdata_shape)
             grid = (batch_size, 1, 1)
-            block = (sh, sh, 1)
+            block = (1, sh, sh)
             image_mask_split(mask_idx, image, np.int32(batch_size),
                              np.int32(s), self._sdata,
                              block=block, grid=grid)
@@ -209,7 +210,8 @@ def theano_split_mask(mask_idx, image):
                                     image[idx.nonzero()])
         splitted_list.append(tmp_image)
     splitted = T.stack(splitted_list)
-    return splitted, splitted**2, count.reshape((len(MASK), shp[0], 1, 1, 1), ndim=5)
+    return splitted, splitted**2, \
+           count.reshape((len(MASK), shp[0], 1, 1, 1), ndim=5)
 
 
 def split_to_mean_var(sum, pow, count):

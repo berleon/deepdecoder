@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from functools import partial
+
+import itertools
 from deepdecoder.pydeepdecoder import GridGenerator, MaskGridArtist
+from keras.layers.core import Dense, Reshape
+from keras.models import Sequential, Graph
+from keras.optimizers import Adam
 import theano
 import theano.tests.unittest_tools
 import theano.tensor as T
-from lapgan.cuda_loss import cuda_split_mask, theano_split_mask, mask_loss
+from lapgan.mask_loss import cuda_split_mask, theano_split_mask, mask_loss
 import deepdecoder.generate_grids as gen_grids
 from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE
 import numpy as np
@@ -56,35 +61,36 @@ def test_cuda_mask_split_equal():
 
 
 def test_cuda_mask_split_verify_grad():
-    mask_idx = next(masks(1, scales=[0.25]))
-    axis = [2, 3, 4]
+    for s in [1., 0.25]:
+        mask_idx = next(masks(1, scales=[s]))
+        axis = [2, 3, 4]
 
-    def fun_sum(fn, mask, image):
-        th_sum, _, count = fn(mask, image)
-        return (th_sum.sum(axis) / count.sum(axis)).sum()
+        def fun_sum(fn, mask, image):
+            th_sum, _, count = fn(mask, image)
+            return (th_sum.sum(axis) / count.sum(axis)).sum()
 
-    def fun_sum_pow(fn, mask, image):
-        th_sum, th_pow, count = fn(mask, image)
-        return ((th_sum + th_pow).sum(axis) / count.sum(axis)).sum()
+        def fun_sum_pow(fn, mask, image):
+            th_sum, th_pow, count = fn(mask, image)
+            return ((th_sum + th_pow).sum(axis) / count.sum(axis)).sum()
 
-    def grad_fn(loss):
-        image = T.tensor4()
-        mask = T.tensor4()
-        return theano.function([mask, image], T.grad(loss(mask, image), image))
+        def grad_fn(loss):
+            image = T.tensor4()
+            mask = T.tensor4()
+            return theano.function([mask, image], T.grad(loss(mask, image), image))
 
-    cuda_grad_fn = grad_fn(partial(fun_sum, cuda_split_mask))
-    theano_grad_fn = grad_fn(partial(fun_sum, theano_split_mask))
+        cuda_grad_fn = grad_fn(partial(fun_sum, cuda_split_mask))
+        theano_grad_fn = grad_fn(partial(fun_sum, theano_split_mask))
 
-    img_val = np.random.random(mask_idx.shape).astype(np.float32)
-    cuda_grad = cuda_grad_fn(mask_idx, img_val)
-    theano_grad = theano_grad_fn(mask_idx, img_val)
-    np.testing.assert_allclose(cuda_grad, theano_grad, rtol=1e-5)
+        img_val = np.random.random(mask_idx.shape).astype(np.float32)
+        cuda_grad = cuda_grad_fn(mask_idx, img_val)
+        theano_grad = theano_grad_fn(mask_idx, img_val)
+        np.testing.assert_allclose(cuda_grad, theano_grad, rtol=1e-5)
 
-    cuda_grad_fn = grad_fn(partial(fun_sum_pow, cuda_split_mask))
-    theano_grad_fn = grad_fn(partial(fun_sum_pow, theano_split_mask))
-    cuda_grad = cuda_grad_fn(mask_idx, img_val)
-    theano_grad = theano_grad_fn(mask_idx, img_val)
-    np.testing.assert_allclose(cuda_grad, theano_grad, rtol=1e-5)
+        cuda_grad_fn = grad_fn(partial(fun_sum_pow, cuda_split_mask))
+        theano_grad_fn = grad_fn(partial(fun_sum_pow, theano_split_mask))
+        cuda_grad = cuda_grad_fn(mask_idx, img_val)
+        theano_grad = theano_grad_fn(mask_idx, img_val)
+        np.testing.assert_allclose(cuda_grad, theano_grad, rtol=1e-5)
 
 
 def test_cuda_theano_mask_split_sum_equal():
@@ -147,3 +153,32 @@ def test_mask_loss():
     t = Timer(lambda: theano_mask_loss(mask_idx, image_ok))
     print("theano implementation: {}".format(t.timeit(number=n) / n))
 
+
+def test_mask_loss_network():
+    model = Sequential()
+    model.add(Dense(16*16, input_dim=16*16))
+    model.add(Reshape((1, 16, 16)))
+    net_out = model.get_output()
+
+    net_in = model.get_input()
+    th_mask = T.tensor4()
+    loss = mask_loss(th_mask, net_out)[0]
+    updates = Adam().get_updates(model.params, model.constraints, loss)
+    train_fn = theano.function([th_mask, net_in], [loss], updates=updates)
+
+    nb_batches = 32
+    mask_idx = next(masks(64*nb_batches, scales=[0.25]))
+    z = np.random.uniform(low=-1, high=1, size=mask_idx.shape).reshape((-1, 16*16)).astype(np.float32)
+    first_loss = 0
+
+    epochs = 30
+    nb_batches = 10
+    for i, mask_idx in enumerate(itertools.islice(masks(64*nb_batches, scales=[0.25]), epochs)):
+        z = np.random.uniform(low=-1, high=1, size=mask_idx.shape
+                              ).reshape((-1, 16*16)).astype(np.float32)
+        loss = train_fn(mask_idx, z)
+        # print(loss)
+        if i == 0:
+            first_loss = loss
+
+    assert first_loss > loss

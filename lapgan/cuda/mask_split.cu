@@ -65,11 +65,10 @@ __device__ inline void tmpl_image_mask_split_grad(const float * mask, const floa
                                  const int bs, const int N, float * grad)
 {
     const int b = blockIdx.x;
-
     const int block_r = blockIdx.y * blockDim.y;
     const int block_c = blockIdx.z * blockDim.z;
     const int r = block_r + threadIdx.y;
-    const int c = block_c + threadIdx.x;
+    const int c = block_c + threadIdx.z;
     const int sr = r/2;
     const int sc = c/2;
 
@@ -119,7 +118,7 @@ __global__ void image_mask_split(const float * mask, const float * image,
     const int block_r = blockIdx.y * blockDim.y;
     const int block_c = blockIdx.z * blockDim.z;
     const int sr = block_r + threadIdx.y;
-    const int sc = block_c + threadIdx.x;
+    const int sc = block_c + threadIdx.z;
 
     const int b = blockIdx.x;
     const int r = 2*sr;
