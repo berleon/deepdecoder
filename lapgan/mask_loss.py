@@ -247,30 +247,43 @@ def mask_loss(mask_image, image, impl='auto'):
     white_mean = slice_mean(slice(ignore_idx+1, None))
     min_distance = 0.25 * T.ones_like(black_mean)
     mean_distance = T.minimum(white_mean - black_mean, min_distance)
-    loss = (mean_distance - min_distance)**2
-
+    black_white_loss = (mean_distance - min_distance)**2
     background_ring_idx = mask_keys.index("BACKGROUND_RING")
     outer_white_ring_idx = mask_keys.index("OUTER_WHITE_RING")
-    ring_distance = T.minimum(mean[outer_white_ring_idx] - mean[background_ring_idx], min_distance)
-    loss += (ring_distance - min_distance)**2
+    ring_min_distance = 0.1 * T.ones_like(black_mean)
+    ring_distance = T.minimum(mean[outer_white_ring_idx] -
+                              mean[background_ring_idx],
+                              ring_min_distance)
+    ring_loss = (ring_distance - ring_min_distance)**2 + \
+        0.25*var[background_ring_idx]
+    cell_losses = []
 
-    cell_loss = T.zeros_like(loss)
-
-    def cell_loss_fn(mask_color, color_mean):
+    def cell_loss_fn(mask_color, color_mean, mean_weight=1., var_weight=4.):
         cell_idx = mask_keys.index(mask_color)
         cell_mean = mean[cell_idx]
         cell_weight = count[cell_idx].sum()
         return T.switch(T.eq(count[cell_idx], 0),
                         T.zeros_like(black_mean),
                         cell_weight * (
-                            (color_mean - cell_mean)**2 + 4*var[cell_idx]
+                            mean_weight*(color_mean - cell_mean)**2 + var_weight*var[cell_idx]
                         ))
     for black_parts in MASK_BLACK:
-        cell_loss += cell_loss_fn(black_parts, black_mean)
+        cell_losses.append(cell_loss_fn(black_parts, black_mean))
     for white_parts in MASK_WHITE:
-        cell_loss += cell_loss_fn(white_parts, white_mean)
+        if white_parts == ["OUTER_WHITE_RING"]:
+            cell_losses.append(cell_loss_fn(white_parts, white_mean,
+                                            mean_weight=0.4, var_weight=0.1))
+        else:
+            cell_losses.append(cell_loss_fn(white_parts, white_mean))
 
-    cell_loss /= count[:background_ring_idx].sum() + count[ignore_idx+1:].sum()
-    loss += cell_loss
-    return 50*T.mean(loss), 50*loss
+    cell_losses = [l / (count[:background_ring_idx].sum() + count[ignore_idx+1:].sum()) for l in cell_losses]
+
+    cell_loss = sum(cell_losses)
+    loss = black_white_loss + ring_loss + cell_loss
+    return {'loss': 50*T.mean(loss),
+            'loss_per_sample': 50*loss,
+            'black_white_loss': black_white_loss,
+            'ring_loss': ring_loss,
+            'cell_losses': cell_losses,
+            }
 

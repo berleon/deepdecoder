@@ -135,16 +135,18 @@ def test_mask_loss():
 
     th_mask, th_img = T.tensor4(), T.tensor4()
     cuda_mask_loss = theano.function([th_mask, th_img],
-                                     mask_loss(th_mask, th_img, impl='cuda'))
+                                     mask_loss(th_mask, th_img,
+                                               impl='cuda')['loss'])
 
     theano_mask_loss = theano.function([th_mask, th_img],
-                                       mask_loss(th_mask, th_img, impl='theano'))
+                                       mask_loss(th_mask, th_img,
+                                                 impl='theano')['loss'])
     mask_idx = next(masks(1))
     image_ok = np.zeros_like(mask_idx)
     image_ok[mask_idx > MASK["IGNORE"]] = 1
 
-    assert (cuda_mask_loss(mask_idx, image_ok)[1] == 0).all()
-    assert (theano_mask_loss(mask_idx, image_ok)[1] == 0).all()
+    assert (cuda_mask_loss(mask_idx, image_ok) == 0).all()
+    assert (theano_mask_loss(mask_idx, image_ok) == 0).all()
 
     t = Timer(lambda: cuda_mask_loss(mask_idx, image_ok))
     n = 10
@@ -162,7 +164,7 @@ def test_mask_loss_network():
 
     net_in = model.get_input()
     th_mask = T.tensor4()
-    loss = mask_loss(th_mask, net_out)[0]
+    loss = mask_loss(th_mask, net_out)['loss']
     updates = Adam().get_updates(model.params, model.constraints, loss)
     train_fn = theano.function([th_mask, net_in], [loss], updates=updates)
 
