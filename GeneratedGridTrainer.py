@@ -40,7 +40,11 @@ class NetworkArgparser(object):
 
     def parse_args(self):
         args = self.parser.parse_args()
-        args.func(args)
+        if hasattr(args, 'func'):
+            args.func(args)
+        else:
+            self.parser.print_help()
+            exit(1)
 
 
 class GeneratedGridTrainer(object):
