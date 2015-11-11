@@ -18,7 +18,7 @@ import math
 import pycuda.driver as pycu
 import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
-import pycuda.autoinit
+import theano.misc.pycuda_init
 
 from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE
 
@@ -31,9 +31,10 @@ import theano.sandbox.cuda as thcu
 from theano.sandbox.cuda import CudaNdarrayType
 
 
-mask_split_file = os.path.join(os.path.dirname(__file__), 'cuda/mask_split.cu')
-with open(mask_split_file) as f:
-    mask_split_kernel_code = f.read()
+def mask_split_kernel_code():
+    mask_split_file = os.path.join(os.path.dirname(__file__), 'cuda/mask_split.cu')
+    with open(mask_split_file) as f:
+        return f.read()
 
 
 def shape_ok(shp):
@@ -95,7 +96,7 @@ class SplitMaskGrad(theano.Op):
     def make_thunk(self, node, storage_map, _, _2):
         inputs = [storage_map[v] for v in node.inputs]
         outputs = [storage_map[v] for v in node.outputs]
-        mod = SourceModule(mask_split_kernel_code, no_extern_c=1)
+        mod = SourceModule(mask_split_kernel_code(), no_extern_c=1)
         image_mask_split_grad = mod.get_function(self.function_name)
 
         def thunk():
@@ -155,7 +156,7 @@ class SplitMask(theano.Op):
     def make_thunk(self, node, storage_map, _, _2):
         inputs = [storage_map[v] for v in node.inputs]
         outputs = [storage_map[v] for v in node.outputs]
-        mod = SourceModule(mask_split_kernel_code, no_extern_c=1)
+        mod = SourceModule(mask_split_kernel_code(), no_extern_c=1)
         image_mask_split = mod.get_function("image_mask_split")
         self._sdata = None
 
@@ -230,7 +231,7 @@ def split_to_mean_var(sum, pow, count):
 def mask_loss(mask_image, image, impl='auto'):
     if (impl == 'auto' and theano.config.device.startswith("gpu")) \
             or impl == "cuda":
-        split_fn = cuda_split_mask
+        split_fn = SplitMask()
     else:
         if theano.config.device.startswith("gpu"):
             print("Warning: Possible very slow. GPU is avialable but still "
