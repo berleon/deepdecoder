@@ -4,24 +4,25 @@ import operator
 import os
 import time
 import itertools
+from dotmap import DotMap
 
 import h5py
-import scipy
 import numpy as np
 import theano
 import theano.tensor as T
 import theano.tensor.shared_randomstreams as T_random
 import matplotlib.pyplot as plt
-from beras.layers.attention import RotationTransformer
-from deepdecoder import NUM_CELLS
+
 from keras import objectives
 from keras.models import Sequential, Graph
 from keras.layers.core import Dense, Dropout, Activation, Flatten, Reshape, Layer
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, UpSample2D
 from keras.optimizers import SGD, Adam
 
+from deepdecoder import NUM_CELLS
 from beras.gan import GAN, upsample
 from beras.models import AbstractModel
+from beras.layers.attention import RotationTransformer
 from beras.util import downsample, blur
 
 from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE, \
@@ -120,17 +121,19 @@ def get_gan_dense_model():
     gen.add_node(Dense(2*n, activation='relu'),
                  name='dense1', input='input_flat')
     
-    gen.add_node(Dense(n, activation='relu'), name='dense2', input='dense1')
+    gen.add_node(Dense(2*n, activation='relu'), name='dense2', input='dense1')
     gen.add_node(Dense(n, activation='sigmoid'), name='dense3', input='dense2')
     gen.add_node(Reshape((1, 64, 64)), name='dense_reshape', input='dense3')
     gen.add_output('output', input='dense_reshape')
     
     dis = Sequential()
-    dis.add(Convolution2D(12, 3, 3, border_mode='same', activation='relu', input_shape=(1, 64, 64)))
+    dis.add(Convolution2D(12, 3, 3, activation='relu', input_shape=(1, 64, 64)))
     dis.add(MaxPooling2D())
     dis.add(Dropout(0.5))
-    dis.add(Convolution2D(18, 3, 3, border_mode='same', activation='relu'))
+    dis.add(Convolution2D(18, 3, 3, activation='relu'))
     dis.add(MaxPooling2D())
+    dis.add(Dropout(0.5))
+    dis.add(Convolution2D(18, 3, 3, activation='relu'))
     dis.add(Dropout(0.5))
     dis.add(Flatten())
     dis.add(Dense(256, activation="relu"))
@@ -144,8 +147,12 @@ def get_decoder_model():
     rot_model = Sequential()
     rot_model.add(Convolution2D(8, 5, 5, activation='relu',
                                 input_shape=(1, size, size)))
-    rot_model.add(MaxPooling2D((5, 5)))
+    rot_model.add(MaxPooling2D((3, 3)))
     rot_model.add(Dropout(0.5))
+    rot_model.add(Convolution2D(8, 5, 5, activation='relu'))
+    rot_model.add(MaxPooling2D((3, 3)))
+    rot_model.add(Dropout(0.5))
+
     rot_model.add(Flatten())
     rot_model.add(Dense(256, activation='relu'))
     rot_model.add(Dropout(0.5))
@@ -168,201 +175,171 @@ def get_decoder_model():
     model.add(Convolution2D(48, 2, 2, border_mode='valid',
                             activation='relu'))
     model.add(Dropout(0.5))
+
+    model.add(Convolution2D(48, 2, 2, border_mode='valid',
+                            activation='relu'))
+    model.add(Dropout(0.5))
     model.add(Flatten())
-    model.add(Dense(1200))
-    model.add(Activation('relu'))
+    model.add(Dense(1000, activation='relu'))
+    model.add(Dense(1000, activation='relu'))
     model.add(Dropout(0.5))
-
-    model.add(Dense(512))
-    model.add(Activation('relu'))
-    model.add(Dropout(0.5))
-
+    model.add(Dense(512, activation='relu'))
     model.add(Dense(NUM_CELLS, activation='sigmoid'))
     return model
 
 
-class dotdict(dict):
-    """dot.notation access to dictionary attributes"""
-    def __getattr__(self, attr):
-        return self.get(attr)
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
-
-
 class MaskGAN(AbstractModel):
-    def __init__(self, gan, decoder):
+    def __init__(self, gan, decoder=None):
         self.gan = gan
         self.decoder = decoder
         self.batch_size = batch_size
 
-    def build_graph(self, optimizer_factory):
-        p = dotdict()
-        p.mask_idx = T.tensor4("mask_idx")
-        p.mask_bw = bw_mask(p.mask_idx)
-        p.x_real = T.tensor4("x_real")
-        p.mask_labels = T.matrix("mask_labels")
+        self.compile_functions = {
+            'generate': self._compile_generate,
+            'debug': self._compile_debug,
+            'train_gan': self._compile_train_gan,
+            'train_decoder': self._compile_train_decoder,
+            'train_mask_only': self._compile_train_mask_only,
+        }
 
-        p.gan_losses = self.gan.losses(p.x_real, gen_conditional=[p.mask_idx])
-        p.fake_image = self.gan.g_out
-        p.fake_image_blur = blur(p.fake_image)
-        p.mask_loss_dict = mask_loss(p.mask_idx, p.fake_image_blur)
-        p.gan_mask_loss = p.mask_loss_dict['loss']
+    def build_graph(self):
+        mask_idx = T.tensor4("mask_idx")
+        mask_bw = bw_mask(mask_idx)
+        real = T.tensor4("real")
+        mask_labels = T.matrix("mask_labels")
 
-        p.decoder_in = self.decoder.get_input(train=False)
-        p.decoder_out = self.decoder.get_output(train=False)
+        gan_losses = self.gan.losses(real, gen_conditional=[mask_idx])
+        d_in = self.gan.D.layers[0].input
+        fake_image = self.gan.g_out
+        fake_image_blur = blur(fake_image)
+        mask_loss_dict = mask_loss(mask_idx, fake_image_blur)
+        gan_mask_loss = mask_loss_dict['loss']
 
-        self.decoder.layers[0].input = p.fake_image
-        p.decoder_out_on_gan = self.decoder.get_output(train=True)
-        p.decoder_loss = objectives.mse(
-            p.mask_labels, p.decoder_out_on_gan).mean()
+        decoder_in = self.decoder.get_input(train=False)
+        decoder_out = self.decoder.get_output(train=False)
 
-        p.g_loss_mask = p.gan_mask_loss + p.gan_losses[0]
-        p.g_loss_decoder = p.decoder_loss + p.gan_losses[0]
-        p.g_loss_decoder_mask = p.gan_mask_loss + 3*p.decoder_loss + p.gan_losses[0]
+        self.decoder.layers[0].input = fake_image
+        decoder_out_on_gan = self.decoder.get_output(train=True)
+        decoder_rotation = self.decoder.layers[0].get_output(train=True)
+        decoder_loss = objectives.mse(mask_labels, decoder_out_on_gan).mean()
 
-        p.g_updates_mask = optimizer_factory("g").get_updates(
+        g_loss_on_d = gan_losses[0]
+        g_loss_mask = gan_mask_loss + gan_losses[0]
+
+        d_loss = gan_losses[1]
+
+        return DotMap(locals())
+
+    train_gan_labels = ['g_on_d', 'd', 'd_real', 'd_gen', "m", "g"]
+
+    def _compile_train_gan(self, p, optimizer_factory, mode):
+        d_updates = optimizer_factory("d").get_updates(
+            self.gan.D.params, self.gan.D.constraints, p.d_loss)
+        g_updates_mask = optimizer_factory("g").get_updates(
             self.gan.G.params, self.gan.G.constraints, p.g_loss_mask)
-        p.g_updates_decoder = optimizer_factory("g").get_updates(
-            self.gan.G.params, self.gan.G.constraints, p.g_loss_decoder)
+        self._train_gan = theano.function(
+            [p.real, p.mask_idx],
+            p.gan_losses + (p.gan_mask_loss, p.g_loss_mask),
+            updates=g_updates_mask + d_updates,
+            mode=mode)
 
-        p.g_updates_decoder_mask = optimizer_factory("g").get_updates(
-            self.gan.G.params, self.gan.G.constraints, p.g_loss_decoder_mask)
+    train_decoder_labels = ["decoder"]
 
-        p.decoder_updates = optimizer_factory("decoder").get_updates(
+    def _compile_train_decoder(self, p, optimizer_factory, mode):
+        decoder_updates = optimizer_factory("decoder").get_updates(
             self.decoder.params, self.decoder.constraints, p.decoder_loss)
+        self._train_decoder = theano.function(
+            [p.mask_idx, p.mask_labels],
+            [p.decoder_loss],
+            updates=decoder_updates,
+            mode=mode)
 
-        p.g_updates_mask_only = optimizer_factory("g").get_updates(
+    train_mask_only_labels = ["m"]
+
+    def _compile_train_mask_only(self, p, optimizer_factory, mode):
+        g_updates_mask_only = optimizer_factory("g").get_updates(
             self.gan.G.params, self.gan.G.constraints, p.gan_mask_loss)
-        d_loss = p.gan_losses[1]
-        p.d_updates = optimizer_factory("d").get_updates(
-            self.gan.D.params, self.gan.D.constraints, d_loss)
+        self._train_mask_only = theano.function(
+            [p.mask_idx], [p.gan_mask_loss],
+            updates=g_updates_mask_only, mode=mode)
 
-        return p
-
-    def _build_train_gan(self, p, mode, compile_fn=True):
-        self.train_gan_labels = ['g_on_d', 'd', 'd_real', 'd_gen', "m", "g"]
-        if compile_fn:
-            self._train_gan = theano.function(
-                [p.x_real, p.mask_idx],
-                p.gan_losses + (p.gan_mask_loss, p.g_loss_mask),
-                updates=p.g_updates_mask + p.d_updates, mode=mode)
-
-    def _build_train_gan_decoder(self, p, mode, compile_fn=True):
-        self.train_gan_decoder_labels = ['g_on_d', 'd', 'd_real', 'd_gen',
-                             "m", "g", "decoder"]
-        if compile_fn:
-            self._train_gan_decoder = theano.function(
-                [p.x_real, p.mask_idx, p.mask_labels],
-                p.gan_losses + (p.gan_mask_loss, p.g_loss_decoder_mask, p.decoder_loss),
-                updates=p.g_updates_decoder_mask + p.d_updates + p.decoder_updates,
-                mode=mode)
-
-    def _build_train_decoder(self, p, mode, compile_fn=True):
-        self.train_decoder_labels = ["decoder"]
-        if compile_fn:
-            self._train_decoder = theano.function(
-                [p.mask_idx, p.mask_labels],
-                [p.decoder_loss],
-                updates=p.decoder_updates,
-                mode=mode)
-
-    def _build_decoder_predict(self, p, mode, compile_fn=True):
-        self.decoder_predict_labels = ["predict_id"]
-        if compile_fn:
-            self._decoder_predict = theano.function(
-                [p.decoder_in],
-                [p.decoder_out],
-                mode=mode)
-
-    def _build_train_mask_only(self, p, mode, compile_fn=True):
-        if compile_fn:
-            self._train_mask_only = theano.function(
-                [p.mask_idx], [p.gan_mask_loss],
-                updates=p.g_updates_mask_only, mode=mode)
-        self.train_mask_only_labels = ["m"]
-
-    def _build_generate(self, p, mode, compile_fn=True):
+    def _compile_generate(self, p, optimizer_factory, mode):
         self._generate_labels = ["image"]
         self._generate = theano.function([p.mask_idx],
                                          [p.fake_image], mode=mode)
 
-    def _build_debug(self, p, mode, compile_fn=True):
-        self.debug_labels = ["real", "mask_bw", "image", "d_out",
-                             "mask_loss_per_sample", "black_white_loss",
-                             "ring_loss", "cell_losses"] + self.train_gan_labels
+    debug_labels = ["real", "mask_bw", "image", "d_out", "d_in",
+                    "mask_loss_per_sample", "black_white_loss",
+                    "ring_loss", "cell_losses"] + train_gan_labels + \
+                   ["predicted_labels", "decoder_rotation"]
+
+    def _compile_debug(self, p, optimizer_factory, mode):
         ml = p.mask_loss_dict
         self._debug = theano.function(
-            [p.x_real, p.mask_idx],
-            [p.x_real, p.mask_bw, p.fake_image, self.gan.d_out,
+            [p.real, p.mask_idx],
+            [p.real, p.mask_bw, p.fake_image, self.gan.d_out,
              ml["loss_per_sample"],
              ml['black_white_loss'],
              ml['ring_loss'],
              T.stack(ml["cell_losses"]), ] + list(p.gan_losses) +
-            [p.gan_mask_loss, p.g_loss_mask],
+            [p.gan_mask_loss, p.g_loss_mask] +
+            [p.decoder_out_on_gan, p.decoder_rotation],
             mode=mode)
 
     def compile(self, optimizer_factory, functions=None, mode=None):
-
-        all_functions = [
-            'generate', 'debug', 'train_gan_decoder', 'train_decoder',
-            'decoder_predict', 'train_mask_only', 'train_gan', 'train_all']
         if functions is None:
             functions = ['train_gan']
         if functions == "all":
-            functions = all_functions
+            functions = list(self.compile_functions.keys())
 
         for f in functions:
-            assert f in all_functions, "Unknown function: " + f
+            assert f in self.compile_functions.keys(), "Unknown function: " + f
 
-        p = self.build_graph(optimizer_factory)
+        p = self.build_graph()
 
-        self._build_train_gan(p, mode, 'train_gan' in functions)
-        self._build_train_gan_decoder(p, mode, 'train_gan_decoder' in functions)
-        self._build_train_decoder(p, mode, 'train_decoder' in functions)
-        self._build_decoder_predict(p, mode, 'decoder_predict' in functions)
-        self._build_train_mask_only(p, mode, 'train_mask_only' in functions)
-        self._build_generate(p, mode, 'generate' in functions)
-        self._build_debug(p, mode, 'debug' in functions)
+        for f in functions:
+            self.compile_functions[f](p, optimizer_factory, mode)
 
-    def fit(self, X=None, mask_idx=None, mask_labels=None, nb_epoch=100, verbose=0,
-            callbacks=None,  shuffle=True, train_mode="gan"):
+    def fit(self, ins, nb_epoch=100, verbose=0, direct_indexing=None,
+            callbacks=None, shuffle=True, train_mode="gan"):
         if callbacks is None:
             callbacks = []
+        if direct_indexing is None:
+            direct_indexing = [False] * len(ins)
 
-        if X is not None:
-            n = len(X)
-        else:
-            n = len(mask_idx)
+        assert len(ins) >= 1
+        assert len(ins) == len(direct_indexing)
+        n = len(ins[0])
 
-        if train_mode == "gan":
-            fn = self._train_gan
-            labels = self.train_gan_labels
-        elif train_mode == "gan_decoder":
-            fn = self._train_gan_decoder
-            labels = self.train_gan_decoder_labels
-        elif train_mode == "decoder":
-            fn = self._train_decoder
-            labels = self.train_decoder_labels
-        elif train_mode == "mask_only":
-            fn = lambda X, mi: self._train_mask_only(mi)
-            labels = self.train_mask_only_labels
-        else:
-            raise ValueError("unknown train_mode `{}`".format(train_mode))
+        train_modes = {
+            "gan": lambda: (self._train_gan, self.train_gan_labels),
+            "decoder": lambda: (self._train_decoder, self.train_decoder_labels),
+            "mask_only": lambda: (self._train_mask_only, self.train_mask_only_labels),
+            "gan_invert": lambda: (self._train_gan_invert, self.train_gan_invert_labels)
+        }
+
+        if train_mode not in train_modes:
+            raise ValueError("Unknown train mode: {}".format(train_mode))
+        try:
+            fn, labels = train_modes[train_mode]()
+        except AttributeError:
+            raise ValueError(
+                "Function for {} was not compiled. Did you forget to add it "
+                "in MaskGAN.compile(..., functions=[<Here>])?")
 
         def train(model, batch_indicies, batch_index, batch_logs=None):
             if batch_logs is None:
                 batch_logs = {}
-    
-            b = batch_index*self.batch_size//2
-            e = (batch_index+1)*self.batch_size//2
-            ins = []
-            if X is not None:
-                ins.append(X[batch_indicies[b:e]])
-            if mask_idx is not None:
-                ins.append(mask_idx[b:e])
-            if mask_labels is not None:
-                ins.append(mask_labels[b:e])
-            outs = fn(*ins)
+
+            batch_ins = []
+            s = batch_size//2*batch_index
+            e = s + batch_size//2
+            for direct, arr in zip(direct_indexing, ins):
+                if direct_indexing:
+                    batch_ins.append(arr[s:e])
+                else:
+                    batch_ins.append(arr[batch_indicies])
+            outs = fn(*batch_ins)
 
             if type(outs) != list:
                 outs = [outs]
@@ -379,7 +356,7 @@ class MaskGAN(AbstractModel):
         self.gan.D.load_weights("decoder")
 
     def save_weights(self, fname, overwrite=False):
-        os.makedirs(fname, exist_ok=True)
+        os.makedirs(fname.rstrip("{}.hdf5"), exist_ok=True)
         self.gan.G.save_weights(fname.format("generator"), overwrite)
         self.gan.D.save_weights(fname.format("detector"), overwrite)
         self.decoder.save_weights(fname.format("decoder"), overwrite)
@@ -390,8 +367,8 @@ class MaskGAN(AbstractModel):
     def generate(self, *conditional):
         return self._generate(*conditional)[0]
 
-    def debug(self, X, mask_idx):
-        outs = self._debug(X, mask_idx)
+    def debug(self, X, mask_idx, mask_labels):
+        outs = self._debug(X, mask_idx, mask_labels)
         return dict(zip(self.debug_labels, outs))
 
 
@@ -411,8 +388,8 @@ def tags_from_hdf5(fname):
         for hdf5_name in pathfile.readlines():
             hdf5_fname = os.path.dirname(fname) + "/" + hdf5_name.rstrip('\n')
             f = h5py.File(hdf5_fname)
-            data = np.asarray(f["data"])
-            labels = np.asarray(f["labels"])
+            data = np.asarray(f["data"], dtype=np.float32)
+            labels = np.asarray(f["labels"], dtype=np.float32)
             tags = data[labels == 1]
             tags /= 255.
             tags_list.append(tags)
@@ -446,22 +423,16 @@ def train(args):
     print("Compiling...")
     start = time.time()
 
-    gan.compile(optimizer, functions=[ # "debug", "train_gan", "train_mask_only",
-                                           "train_gan_decoder",
-                                            #"decoder_predict",
-                                     #"train_decoder"
-                                        ])
+    gan.compile(optimizer, functions=['train_gan'])
     print("Done Compiling in {0:.2f}s".format(time.time() - start))
 
     try:
         for i, (masks_idx, mask_labels, grid_params) in \
                 enumerate(itertools.islice(masks(len(X)), 200)):
             print(i)
-            print(mask_labels.shape)
-            gan.fit(X=X, mask_idx=masks_idx, mask_labels=mask_labels, verbose=1,
-                    nb_epoch=1, train_mode="gan_decoder")
-
-    except KeyboardInterrupt:
+            gan.fit([X, masks_idx], direct_indexing=[False, True], verbose=1, nb_epoch=1,
+                    train_mode="gan")
+    finally:
         print("Saving model to {}".format(os.path.realpath(args.weight_dir)))
         output_dir = args.weight_dir + "/{}.hdf5"
         gan.save_weights(output_dir)
