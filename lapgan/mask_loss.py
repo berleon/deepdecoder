@@ -17,6 +17,7 @@ import os
 import math
 import pycuda.driver as pycu
 import pycuda.gpuarray as gpuarray
+from dotmap import DotMap
 from pycuda.compiler import SourceModule
 import theano.misc.pycuda_init
 
@@ -281,10 +282,10 @@ def mask_loss(mask_image, image, impl='auto'):
 
     cell_loss = sum(cell_losses)
     loss = black_white_loss + ring_loss + cell_loss
-    return {'loss': 50*T.mean(loss),
-            'loss_per_sample': 50*loss,
+    return DotMap({'loss': 15*T.mean(loss),
+            'loss_per_sample': 15*loss,
             'black_white_loss': black_white_loss,
             'ring_loss': ring_loss,
             'cell_losses': cell_losses,
-            }
+            })
 
