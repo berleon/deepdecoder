@@ -1,8 +1,8 @@
 #! /usr/bin/env python3
 
-from beras.gan import GAN, stack_laplacian_gans, upsample
+from beras.gan import GAN
 from beras.models import AbstractModel
-from beras.util import downsample
+from beras.util import downsample, upsample
 import cairosvg
 from deepdecoder.generate_grids import BlackWhiteArtist, MASK, MASK_BLACK, \
     MASK_WHITE, GridGenerator, MaskGridArtist

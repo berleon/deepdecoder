@@ -52,7 +52,7 @@ model = get_model()
 model.load_weights("weights/0650_all_degrees_model.hdf5")
 
 trainer = GeneratedGridTrainer.GeneratedGridTrainer()
-trainer.set_gt_path_file("/home/leon/uni/bachelor/keras_models/gt_files.txt")
+trainer.set_gt_path_file("/home/leon/uni/bachelor/beesgrid_models/gt_files.txt")
 trainer.fit_data_gen()
 trainer.real_test(model, n_epochs=12)
 
