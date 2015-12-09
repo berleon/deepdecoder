@@ -1,23 +1,22 @@
 #! /usr/bin/env python3
-from deepdecoder.generate_grids import BlackWhiteArtist
-
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D
 import os
 import os.path
-
-from deepdecoder import NUM_CELLS
 import sys
+
+from deepdecoder.generate_grids import BlackWhiteArtist
+from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.models import Sequential
 from scipy.misc import imsave
-import numpy as np
+
+from deepdecoder import NUM_CELLS, GeneratedGridTrainer
+
 PACKAGE_PARENT = '..'
 SCRIPT_DIR = os.path.dirname(os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(__file__))))
 sys.path.append(os.path.normpath(os.path.join(SCRIPT_DIR, PACKAGE_PARENT)))
 
 from beras.layers.attention import RotationTransformer
-import GeneratedGridTrainer
-from GeneratedGridTrainer import NetworkArgparser
+from deepdecoder.GeneratedGridTrainer import NetworkArgparser
 
 
 def get_model():

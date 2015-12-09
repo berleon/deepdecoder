@@ -1,22 +1,18 @@
 #! /usr/bin/env python3
 
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D
-from keras.preprocessing.image import ImageDataGenerator
-import numpy as np
 import os
 import os.path
-
-import deepdecoder.generate_grids as gen_grids
-from deepdecoder import NUM_CELLS
 import sys
+
+from keras.layers.convolutional import Convolution2D, MaxPooling2D
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.models import Sequential
+
+from deepdecoder import NUM_CELLS, GeneratedGridTrainer
 
 PACKAGE_PARENT = '..'
 SCRIPT_DIR = os.path.dirname(os.path.realpath(os.path.join(os.getcwd(), os.path.expanduser(__file__))))
 sys.path.append(os.path.normpath(os.path.join(SCRIPT_DIR, PACKAGE_PARENT)))
-
-import GeneratedGridTrainer
 
 
 def get_model():

@@ -14,6 +14,8 @@
 from argparse import ArgumentParser
 import os
 import itertools
+
+import sys
 from deepdecoder import NUM_CELLS
 
 from keras.preprocessing.image import ImageDataGenerator
@@ -43,6 +45,7 @@ class NetworkArgparser(object):
         if hasattr(args, 'func'):
             args.func(args)
         else:
+            print("No a valid action {}.".format(sys.argv[1]))
             self.parser.print_help()
             exit(1)
 
@@ -89,14 +92,11 @@ class GeneratedGridTrainer(object):
     def real_batches(self, batch_size=32):
         if not self.gt_files:
             raise ValueError("No ground truth files found! Aborting.")
-        for raw_grids, raw_labels in real_grids.batches(
+        for raw_grids, labels in real_grids.batches(
                 self.gt_files, batch_size, repeat=False):
             scaled = raw_grids.astype(np.float32)/255.
-            # swap 0 and 1 in labels
-            labels = np.zeros_like(raw_labels)
-            labels[raw_labels == 0] = 1
             if self.use_preprocessor:
-                yield self.preprocessed(scaled, raw_labels, batch_size)
+                yield self.preprocessed(scaled, labels, batch_size)
             else:
                 yield scaled, labels
 
