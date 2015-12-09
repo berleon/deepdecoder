@@ -15,7 +15,7 @@ import math
 import numpy as np
 import skimage.io
 from skimage import draw
-from deepdecoder.generate_grids import batches, GridGenerator
+from beesgrid.generate_grids import batches, GridGenerator
 from generate_background import BackgroundGenerator
 
 

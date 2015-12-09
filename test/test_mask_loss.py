@@ -11,22 +11,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from functools import partial
-
 import itertools
-from deepdecoder.pydeepdecoder import GridGenerator, MaskGridArtist
-from keras.layers.core import Dense, Reshape
-from keras.models import Sequential, Graph
-from keras.optimizers import Adam
-import theano
-import theano.tests.unittest_tools
-import theano.tensor as T
-from lapgan.mask_loss import cuda_split_mask, theano_split_mask, mask_loss
-import deepdecoder.generate_grids as gen_grids
-from deepdecoder.generate_grids import MASK, MASK_BLACK, MASK_WHITE
-import numpy as np
+from functools import partial
 from timeit import Timer
 
+import matplotlib.pyplot as plt
+import numpy as np
+import theano
+import theano.tensor as T
+import theano.tests.unittest_tools
+import beesgrid.generate_grids as gen_grids
+from beesgrid.generate_grids import MASK
+from beesgrid.pybeesgrid import GridGenerator, MaskGridArtist
+from keras.layers.core import Dense, Reshape
+from keras.models import Sequential
+from keras.optimizers import Adam
+
+from deepdecoder.mask_loss import cuda_split_mask, theano_split_mask, mask_loss, \
+    median, mask_loss_sobel
 
 def masks(batch_size, scales=[1.]):
     batch_size += 64 - (batch_size % 64)
@@ -47,7 +49,7 @@ def test_cuda_mask_split_equal():
         split_fn = theano.function([th_mask, th_img],
                                    cuda_split_mask(th_mask, th_img))
         mask_sum, mask_pow, mask_count = split_fn(mask_idx, image)
-        assert mask_sum.shape == (len(MASK), 64, 1, int(32*s), int(32*s))
+        assert mask_sum.shape == (len(MASK), 64, 1, int(64*s), int(64*s))
         np_split = np.zeros((len(MASK),) + mask_idx.shape)
         for i, mask_enum in enumerate(MASK.values()):
             idx = mask_idx == mask_enum
@@ -94,11 +96,11 @@ def test_cuda_mask_split_verify_grad():
 
 
 def test_cuda_theano_mask_split_sum_equal():
-    mask_idx = theano.shared(next(masks(1, scales=[0.5])))
-    image = theano.shared(np.random.sample((64, 1, 32, 32)).astype(np.float32))
+    mask_idx = theano.shared(next(masks(1, scales=[1.0])))
+    image = theano.shared(np.ones((64, 1, 64, 64)).astype(np.float32))
     axis = [2, 3, 4]
     cuda_split = [o.sum(axis) for o in cuda_split_mask(mask_idx, image)]
-    theano_split = [o.sum(axis)for o in theano_split_mask(mask_idx, image)]
+    theano_split = [o.sum(axis) for o in theano_split_mask(mask_idx, image)]
 
     for c, t in zip(cuda_split, theano_split):
         np.testing.assert_allclose(c.eval(), t.eval(), rtol=1e-5)
@@ -132,7 +134,6 @@ def test_theano_split_mask():
 
 
 def test_mask_loss():
-
     th_mask, th_img = T.tensor4(), T.tensor4()
     cuda_mask_loss = theano.function([th_mask, th_img],
                                      mask_loss(th_mask, th_img,
@@ -154,6 +155,38 @@ def test_mask_loss():
 
     t = Timer(lambda: theano_mask_loss(mask_idx, image_ok))
     print("theano implementation: {}".format(t.timeit(number=n) / n))
+
+
+def test_mask_loss_sobel():
+    th_mask, th_img = T.tensor4(), T.tensor4()
+    ml = mask_loss_sobel(th_mask, th_img)
+    mask_loss = theano.function([th_mask, th_img],
+                                [ml.loss] + list(ml.sobel_mask) +
+                                list(ml.sobel_img))
+
+    mask_idx = next(masks(1))
+    image_ok = 0.5 * np.ones_like(mask_idx)
+    image_ok[mask_idx > MASK["IGNORE"]] = 1
+    image_ok[mask_idx < MASK["BACKGROUND_RING"]] = 0
+
+    print()
+    loss, sobel_mask_x, sobel_mask_y, sobel_img_x, sobel_img_y = \
+        mask_loss(mask_idx, image_ok)
+    plt.set_cmap('gray')
+    plt.subplot(221)
+    plt.imshow(sobel_mask_x[0, 0])
+    plt.subplot(222)
+    plt.imshow(sobel_mask_y[0, 0])
+    plt.colorbar()
+    plt.subplot(223)
+    plt.imshow(sobel_img_x[0, 0])
+    plt.subplot(224)
+    plt.imshow(sobel_img_y[0, 0])
+    plt.colorbar()
+    plt.savefig("mask_loss_sobel.png")
+    print()
+    print("mask_loss: {}".format(mask_loss(mask_idx, image_ok)))
+    assert loss == 0
 
 
 def test_mask_loss_network():
@@ -184,3 +217,56 @@ def test_mask_loss_network():
             first_loss = loss
 
     assert first_loss > loss
+
+
+def test_mask_median():
+    img_shape = (29, 64, 1, 64, 64)
+    pixels = img_shape[-1]*img_shape[-2]
+    counts_shape = (29, 64)
+
+    def np_median(image_split, counts):
+        reshaped = np.reshape(image_split, image_split.shape[:3] + (-1,))
+        img_sort = np.sort(reshaped)
+        idxs = (pixels + counts) // 2
+        print(idxs)
+        return img_sort.take(idxs)
+
+    img = np.random.sample(img_shape).astype(np.float32)
+    counts = (0.8*np.random.sample(counts_shape) * pixels).astype(np.int32)
+
+    np_result = np_median(img, counts)
+    theano_result = median(theano.shared(img), theano.shared(counts)).eval()
+    assert np_result.shape == (29, 64)
+    assert theano_result.shape == (29, 64)
+    np.testing.assert_allclose(np_result, theano_result, rtol=1e-5)
+
+
+def test_mask_loss_median():
+    th_mask, th_img = T.tensor4(), T.tensor4()
+
+    cuda_out = mask_loss_median(th_mask, th_img, impl='cuda')
+    cuda_mask_loss = theano.function([th_mask, th_img],
+                                     [cuda_out['loss'],
+                                      cuda_out['median_black'],
+                                      cuda_out['loss_per_sample'],
+                                      cuda_out['black_white_loss']])
+
+    theano_mask_loss = theano.function([th_mask, th_img],
+                                       mask_loss_median(th_mask, th_img,
+                                                 impl='theano')['loss'])
+    mask_idx = next(masks(1))
+    image_ok = np.zeros_like(mask_idx)
+    image_ok[mask_idx > MASK["IGNORE"]] = 1
+
+    outs = cuda_mask_loss(mask_idx, image_ok)
+    for s in outs[1:]:
+        print(s.shape)
+    assert (cuda_mask_loss(mask_idx, image_ok)[0] == 0).all()
+    assert (theano_mask_loss(mask_idx, image_ok) == 0).all()
+
+    t = Timer(lambda: cuda_mask_loss(mask_idx, image_ok))
+    n = 10
+    print("cuda implementation: {}".format(t.timeit(number=n) / n))
+
+    t = Timer(lambda: theano_mask_loss(mask_idx, image_ok))
+    print("theano implementation: {}".format(t.timeit(number=n) / n))

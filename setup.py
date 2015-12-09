@@ -28,8 +28,6 @@ setup(name='keras-models',
         "dotmap>=1.1.2",
     ],
     packages=[
-        'lapgan',
-        'rotation_net',
-        'gan',
+        'deepdecoder',
     ]
 )

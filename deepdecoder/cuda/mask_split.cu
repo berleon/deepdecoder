@@ -4,7 +4,7 @@
 #define WARP_SIZE 32
 
 
-// TODO: include deepdecoder headers for mask enum
+// TODO: include beesgrid headers for mask enum
 enum MASK {
     INNER_BLACK_SEMICIRCLE,
     CELL_0_BLACK = 1,
@@ -69,14 +69,10 @@ __device__ inline void tmpl_image_mask_split_grad(const float * mask, const floa
     const int block_c = blockIdx.z * blockDim.z;
     const int r = block_r + threadIdx.y;
     const int c = block_c + threadIdx.z;
-    const int sr = r/2;
-    const int sc = c/2;
-
-    const int N2 = N/2;
-    const int s_idx_base = index4(bs, N2, N2, 0, b, sr, sc);
-    const int next_mask_offset = bs*N2*N2;
+    const int s_idx_base = index4(bs, N, N, 0, b, r, c);
+    const int next_mask_offset = bs*N*N;
     const int index = index3(N, N, b, r, c);
-    if (b < bs && r < N && c < N && sr < N2 && sc < N2 && index < bs*N*N) {
+    if (b < bs && r < N && c < N && index < bs*N*N) {
         float mySum = 0;
         for(int i = 0; i < MASK_LEN; i++) {
             const int s_idx = s_idx_base + i*next_mask_offset;
@@ -117,30 +113,22 @@ __global__ void image_mask_split(const float * mask, const float * image,
 {
     const int block_r = blockIdx.y * blockDim.y;
     const int block_c = blockIdx.z * blockDim.z;
-    const int sr = block_r + threadIdx.y;
-    const int sc = block_c + threadIdx.z;
-
+    const int r = block_r + threadIdx.y;
+    const int c = block_c + threadIdx.z;
     const int b = blockIdx.x;
-    const int r = 2*sr;
-    const int c = 2*sc;
-    const int N2 = N/2;
-    const int s_idx_base = index4(bs, N2, N2, 0, b, sr, sc);
-    const int next_mask_offset = bs*N2*N2;
-    const int offset = bs*N2*N2*MASK_LEN;
-    if (b < bs && r + 1 < N && c + 1 < N && sr < N2 && sc < N2) {
-        for(int j = 0; j <= 1; j++) {
-            for(int k = 0; k <=1; k++) {
-                int index = index3(N, N, b, r+j, c+k);
-                //if (index < bs*N*N) {
-                    for(int i = 0; i < MASK_LEN; i++) {
-                        const int s_idx = s_idx_base + i*next_mask_offset;
-                        if(mask[index] == MASKS_INDICIES[i]) {
-                            o_split[s_idx] += image[index];
-                            o_split[s_idx + offset] += pow(image[index], 2);
-                            o_split[s_idx + 2*offset] += 1;
-                        }
-                    }
-                //}
+    if (b < bs && r < N && c < N) {
+        const int s_idx_base = index4(bs, N, N, 0, b, r, c);
+        const int next_mask_offset = bs*N*N;
+        const int offset = bs*N*N*MASK_LEN;
+        const int index = index3(N, N,
+                                 b, r, c);
+
+        for(int i = 0; i < MASK_LEN; i++) {
+            const int s_idx = s_idx_base + i*next_mask_offset;
+            if(mask[index] == MASKS_INDICIES[i]) {
+                o_split[s_idx] = image[index];
+                o_split[s_idx + offset] = pow(image[index], 2);
+                o_split[s_idx + 2*offset] = 1;
             }
         }
     }
