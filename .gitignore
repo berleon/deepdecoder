@@ -6,6 +6,13 @@ __pycache__/
 # C extensions
 *.so
 
+*.png
+data/
+lapgan/data/
+models/
+lapgan/models/
+
+
 # Distribution / packaging
 .Python
 env/
