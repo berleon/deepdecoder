@@ -14,18 +14,19 @@
 
 from distutils.core import setup
 
-setup(name='keras-models',
+setup(name='deepdecoder',
     version='0.0.1',
     description='models for my bacheleor thesis',
     author='Leon Sixt',
     author_email='github@leon-sixt.de',
     install_requires=[
         "numpy>=1.9",
-        "keras==0.2.0",
+        "keras==0.3.0",
         "pytest>=2.7.2",
         "scikit-image>=0.11.3",
         "seya",
         "dotmap>=1.1.2",
+        "seaborn"
     ],
     packages=[
         'deepdecoder',
