@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from test.config import visual_debug
 import itertools
 from functools import partial
 from timeit import Timer
@@ -20,9 +22,8 @@ import numpy as np
 import theano
 import theano.tensor as T
 import theano.tests.unittest_tools
-import beesgrid.generate_grids as gen_grids
-from beesgrid.generate_grids import MASK
-from beesgrid.pybeesgrid import GridGenerator, MaskGridArtist
+from beesgrid import MASK, generate_grids
+from beesgrid import GridGenerator, MaskGridArtist
 from keras.layers.core import Dense, Reshape
 from keras.models import Sequential
 from keras.optimizers import Adam
@@ -34,7 +35,7 @@ def masks(batch_size, scales=[1.]):
     batch_size += 64 - (batch_size % 64)
     generator = GridGenerator()
     artist = MaskGridArtist()
-    for masks in gen_grids.batches(batch_size, generator, artist=artist,
+    for masks in generate_grids(batch_size, generator, artist=artist,
                                    scales=scales):
         yield masks[0].astype(np.float32)
 

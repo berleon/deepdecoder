@@ -25,14 +25,14 @@ import theano
 import theano.sandbox.cuda as thcu
 import theano.tensor as T
 from beras.util import blur, sobel
-from beesgrid.generate_grids import MASK, MASK_BLACK, MASK_WHITE
+from beesgrid import MASK, MASK_BLACK, MASK_WHITE
 from dotmap import DotMap
 from keras.objectives import mse
 from pycuda.compiler import SourceModule
 from theano.misc.pycuda_utils import to_gpuarray, to_cudandarray
 from theano.sandbox.cuda import CudaNdarrayType
-
-from deepdecoder.utils import binary_mask
+import theano.misc.pycuda_init
+from deepdecoder.utils import binary_mask, adaptive_mask
 
 
 def mask_split_kernel_code():
@@ -259,6 +259,57 @@ def median(grid_split_image, grid_counts):
     return medians
 
 
+def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
+    split_fn = get_split_mask_fn(impl)
+    mean, var, count = split_to_mean_var(*split_fn(grid_idx, image))
+
+    def slice_mean(slice):
+        return (mean[slice]*count[slice]).sum(axis=0) / count[slice].sum(axis=0)
+
+    mask_keys = list(MASK.keys())
+    ignore_idx = mask_keys.index("IGNORE")
+    black_mean = slice_mean(slice(0, ignore_idx))
+    white_mean = slice_mean(slice(ignore_idx+1, None))
+    white_mean = T.maximum(white_mean, 0.40)
+    white_mean = T.maximum(white_mean, black_mean + 0.20)
+    black_mean = T.minimum(white_mean - 0.20, black_mean)
+    dimsuffle = (0, 'x', 'x', 'x')
+    bw = adaptive_mask(grid_idx, ignore=0.0,
+                       black=black_mean.dimshuffle(*dimsuffle),
+                       white=white_mean.dimshuffle(*dimsuffle))
+    # bw = blur(bw, sigma=2.)
+    diff = T.zeros_like(bw)
+    idx = T.bitwise_and(T.neq(grid_idx, MASK["IGNORE"]),
+                        T.neq(grid_idx, MASK["BACKGROUND_RING"]))
+    diff = T.set_subtensor(diff[idx.nonzero()], abs(bw - image)[idx.nonzero()])
+    loss = (T.maximum(diff, 0.15)[idx.nonzero()]**2).mean()
+    return DotMap({
+        'loss': loss,
+        'visual': {
+            'diff': diff,
+            'bw_grid': bw
+        }
+    })
+
+
+def mask_loss_mse(grid_idx, image):
+    indicies = T.bitwise_and(T.neq(grid_idx, MASK["IGNORE"]),
+                             T.neq(grid_idx, MASK["BACKGROUND_RING"]))
+    bw = binary_mask(grid_idx, ignore=0.0)
+    diff = (bw - image)
+    loss = (diff[indicies.nonzero()]**2).mean()
+    visual_diff = T.zeros_like(diff)
+    visual_diff = T.set_subtensor(visual_diff[indicies.nonzero()],
+                             diff[indicies.nonzero()]**2)
+    return DotMap({
+        'loss': loss,
+        'visual': {
+            'diff': visual_diff,
+            'bw_grid': bw
+        }
+    })
+
+
 def mask_loss_sobel(grid_idx, image, impl='auto', diff_type='mse', scale=10.):
     def norm_by_max(x):
         maxs = T.max(x, axis=[1, 2, 3])
@@ -268,7 +319,7 @@ def mask_loss_sobel(grid_idx, image, impl='auto', diff_type='mse', scale=10.):
         indicies = T.bitwise_and(x < threshold, x > -threshold)
         return T.set_subtensor(x[indicies.nonzero()], 0)
 
-    bw = binary_mask(grid_idx, ignore_value=0.5)
+    bw = binary_mask(grid_idx, ignore=0.5)
     bw = blur(bw, sigma=2.)
     sobel_bw = sobel(bw)
     sobel_img = [blur(s, sigma=1.) for s in sobel(image)]
@@ -276,26 +327,31 @@ def mask_loss_sobel(grid_idx, image, impl='auto', diff_type='mse', scale=10.):
     sobel_img = [norm_by_max(s) for s in sobel_img]
 
     if diff_type == 'correlation':
-        loss_x = sobel_bw[0] * sobel_img[0]
-        loss_y = sobel_bw[1] * sobel_img[1]
+        loss_x = -sobel_bw[0] * sobel_img[0]
+        loss_y = -sobel_bw[1] * sobel_img[1]
         loss = T.mean(loss_x + loss_y) / 2
     elif diff_type == 'mse':
         sobel_bw = [clip_around_zero(s) for s in sobel_bw]
         sobel_img = [clip_around_zero(s) for s in sobel_img]
-        loss_x = mse(sobel_bw[0], sobel_img[0])
-        loss_y = mse(sobel_bw[1], sobel_img[1])
+        loss_x = (sobel_bw[0] - sobel_img[0])**2
+        loss_y = (sobel_bw[1] - sobel_img[1])**2
         loss = T.mean(loss_x + loss_y) / 2
     else:
         raise ValueError("unknown diff_type: {}".format(diff_type))
 
-    return DotMap({'loss': scale*T.mean(loss),
-                   'loss_x': loss_x,
-                   'loss_y': loss_y,
-                   'sobel_mask': sobel_bw,
-                   'sobel_img': sobel_img,
-                   'loss_x_mean': loss_x.mean(),
-                   'loss_y_mean': loss_x.mean(),
-                   })
+    return DotMap({
+        'loss': scale*T.mean(loss),
+        'visual': {
+            'loss_x': loss_x,
+            'loss_y': loss_y,
+            'sobel_img_x': sobel_img[0],
+            'sobel_img_y': sobel_img[1],
+            'sobel_mask_x': sobel_bw[0],
+            'sobel_mask_y': sobel_bw[1],
+        },
+        'loss_x_mean': loss_x.mean(),
+        'loss_y_mean': loss_x.mean(),
+    })
 
 
 def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1., var_weight=4,):
@@ -346,10 +402,11 @@ def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1., var_weig
 
     cell_loss = sum(cell_losses)
     loss = black_white_loss + ring_loss + cell_loss
-    return DotMap({'loss': scale*T.mean(loss),
-            'loss_per_sample': scale*loss,
-            'black_white_loss': scale*black_white_loss,
-            'ring_loss': scale*ring_loss,
-            'cell_losses': scale*cell_losses,
-            })
+    return DotMap({
+        'loss': scale*T.mean(loss),
+        'loss_per_sample': scale*loss,
+        'black_white_loss': scale*black_white_loss,
+        'ring_loss': scale*ring_loss,
+        'cell_losses': scale*cell_losses,
+    })
 
