@@ -1,13 +1,7 @@
 # coding: utf-8
 
-import os
-import time
-import itertools
-from dotmap import DotMap
 
-import numpy as np
-import theano
-import theano.tensor as T
+import keras.objectives
 import theano.tensor.shared_randomstreams as T_random
 
 from keras.models import Sequential, Graph
@@ -167,20 +161,29 @@ def get_decoder_model():
     return model
 
 
-def mogan(gan: GAN, name, loss_fn, d_optimizer):
-    assert len(gan.gen_conditionals) >= 1
-    y_true = K.placeholder(ndim=gan.ndim_gen_out)
-    v = gan.build_loss()
-    inputs = [v.real, y_true] + v.gen_conditional
-    additional_objective = loss_fn(y_true, v.g_out)
-    gan.build_opt_d(d_optimizer, v)
-    gan._compile_generate(v)
-    mo = MultipleObjectives(name, inputs,
-                            outputs_map={
-                                "d_loss": v.d_loss,
-                                "g_loss": v.g_loss
-                            },
-                            params=gan.G.params,
-                            objectives=[v.g_loss, additional_objective],
-                            additional_updates=v.d_updates)
-    return mo
+class MOGAN:
+    def __init__(self, gan: GAN, loss_fn, optimizer_fn,
+                 name="mogan",
+                 gan_objective=keras.objectives.binary_crossentropy,
+                 gan_regulizer=None):
+        assert len(gan.conditionals) >= 1
+        y_true = K.placeholder(shape=gan.G.outputs["output"].output_shape)
+        v = gan.build_loss(objective=gan_objective)
+        inputs = [v.real, y_true] + v.gen_conditionals
+        additional_objective = loss_fn(y_true, v.g_out)
+        gan.build_opt_d(optimizer_fn(), v)
+        gan_regulizer = GAN.get_regulizer(gan_regulizer)
+        v.g_loss, v.d_loss, v.reg_updates = \
+            gan_regulizer.get_losses(gan, v.g_loss, v.d_loss)
+        gan._compile_generate(v)
+        self.gan = gan
+        self.optimizer_fn = optimizer_fn
+        self.mulit_objectives = MultipleObjectives(
+                name, inputs,
+                outputs_map={"d_loss": v.d_loss, "g_loss": v.g_loss},
+                params=gan.G.params,
+                objectives=[v.g_loss, additional_objective],
+                additional_updates=v.d_updates + v.reg_updates)
+
+    def compile(self):
+        self.mulit_objectives.compile(self.optimizer_fn)

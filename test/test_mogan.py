@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from keras.objectives import mse
 
 import test.config
@@ -21,11 +22,12 @@ import random
 import keras
 import pytest
 from beras.gan import GAN
+from beras.models import asgraph
 from keras.layers.core import Dense
 from keras.models import Sequential
 from keras.optimizers import Adam
 
-from deepdecoder.mogan import mogan
+from deepdecoder.mogan import MOGAN
 import keras.backend as K
 import numpy as np
 
@@ -75,7 +77,8 @@ simple_gan_z_shape = (simple_gan_batch_size, simple_gan_nb_z)
 
 
 def test_mogan():
-    def reconstruction_fn(x):
+    def reconstruction_fn(g_outdict):
+        x = g_outdict['output']
         eps = K.random_normal((simple_gan_batch_size, 2))
         return x[:, :2] + eps*x[:, 2:]
 
@@ -86,13 +89,16 @@ def test_mogan():
         generator.add(Dense(50, activation='relu'))
         generator.add(Dense(50, activation='relu'))
         generator.add(Dense(simple_gan_nb_out))
-
+        generator = asgraph(generator, inputs={
+            GAN.z_name: (simple_gan_nb_z, ),
+            "cond": (simple_gan_nb_cond, ),
+        }, concat_axis=1)
         discriminator = Sequential()
         discriminator.add(Dense(25, activation='relu', input_dim=2))
         discriminator.add(Dense(1, activation='sigmoid'))
+        discriminator = asgraph(discriminator, input_name=GAN.d_input)
         return GAN(generator, discriminator, simple_gan_z_shape,
-                   gen_conditionals=[(simple_gan_batch_size, 4)],
-                   reconstruction_fn=reconstruction_fn)
+                   reconstruct_fn=reconstruction_fn)
     mu1 = [0., 0.]
     sigma1 = 0.50
     mu2 = [1., 1.]
@@ -119,16 +125,17 @@ def test_mogan():
         expec, selection = expected(simple_gan_batch_size)
         return gan.generate(conditionals=[expec]), selection
 
-    bs = simple_gan_batch_size*50
+    bs = simple_gan_batch_size*25
     optimizer_lambda = lambda: Adam(lr=0.0002, beta_1=0.5)
     gan = simple_gan()
-    mo = mogan(gan, "mogan", loss_fn, optimizer_lambda())
-    mo.compile(optimizer_lambda)
+    mogan = MOGAN(gan, loss_fn, optimizer_lambda, gan_objective='mse')
+    mogan.compile()
     expected_val, _ = expected(bs)
     print(expected_val.shape)
-    mo.fit([data(bs), expected_val, expected_val],
-           batch_size=gan.batch_size, verbose=1, nb_epoch=100,
-           callbacks=[Plotter(data(3000), sample_fn=generate)])
+    mogan.mulit_objectives.fit(
+            [data(bs), expected_val, expected_val],
+            batch_size=gan.batch_size, verbose=1, nb_epoch=100,
+            callbacks=[Plotter(data(3000), sample_fn=generate)])
 
 
 
