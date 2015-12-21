@@ -14,19 +14,23 @@
 import os
 import time
 
+from beesgrid.pybeesgrid import NUM_CONFIGS, NUM_MIDDLE_CELLS
 from beras.gan import GAN
+from deepdecoder import TAG_SIZE
 from keras import initializations
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.convolutional import Convolution2D
-from keras.layers.core import Dense, Layer, Reshape, Activation, Flatten
+from keras.layers.core import Dense, Layer, Reshape, Activation, Flatten, Lambda
 from keras.layers.normalization import BatchNormalization
-from keras.models import Sequential
+from keras.models import Sequential, Graph
+from keras.objectives import mse
 from keras.optimizers import Adam
 from theano.sandbox.cuda.basic_ops import gpu_alloc_empty, gpu_contiguous
 from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI
 
-from deepdecoder.utils import loadRealData
-
+from deepdecoder.mogan import MOGAN
+from deepdecoder.utils import loadRealData, binary_mask
+import theano.tensor as T
 
 class Deconvolution2D(Layer):
     def __init__(self, nb_filter, nb_row, nb_col,
@@ -67,7 +71,7 @@ class Deconvolution2D(Layer):
         return d_img
 
 
-def generator():
+def generator(nb_output_channels=1):
     n = 64
     model = Sequential()
     model.add(Dense(8*n*4*4, input_dim=50))
@@ -85,9 +89,50 @@ def generator():
     model.add(BatchNormalization())
     model.add(Activation('relu'))
 
-    model.add(Deconvolution2D(1, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
+    model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
     model.add(Activation('sigmoid'))
     return model
+
+
+def dcmogan(generator, discriminator, batch_size=128):
+    nb_g_z = 20
+    nb_grid_config = NUM_CONFIGS + NUM_MIDDLE_CELLS
+    nb_g_input = nb_g_z + nb_grid_config
+    ff_generator = generator(nb_output_channels=2)
+    g = Graph()
+    grid_config_shape = (batch_size, nb_grid_config)
+    grid_idx_shape = (batch_size, 1, TAG_SIZE, TAG_SIZE)
+
+    g.add_input("z", (nb_g_input, ))
+    g.add_input("grid_config", grid_config_shape[1:])
+    g.add_input("grid_idx", grid_idx_shape[1:])
+    g.add_node(Dense(100, activation='relu'), "dense1",
+               inputs=["z", "dis_cond_1"])
+
+    g.add_node(Dense(generator.layers[0].shape[1:], activation='relu'),
+               "dense2", input="dense1")
+    g.add_node(Dense(1, activation='sigmoid'), "alpha", input="dense2",
+               create_output=True)
+    g.add_node(ff_generator, "dcgan", inputs="dense2")
+    g.add_output("output", input="dcgan")
+
+    def reconstruct(g_outmap):
+        g_out = g_outmap["output"]
+        alpha = g_outmap["alpha"]
+        alpha = 0.5*alpha + 0.5
+        m = g_out[:, 0]
+        v = g_out[:, 1]
+        return alpha * m + (1 - alpha) * v
+
+    def grid_loss(grid_idx, g_out):
+        m = g_out[:, 0]
+        b = binary_mask(grid_idx, ignore=0.0,  white=1.)
+        return mse(b, m)
+
+    gan = GAN(g, discrimator(), z_shape=(batch_size, nb_g_z), reconstruct_fn=reconstruct)
+    mo = MOGAN(gan, grid_loss, Adam(),
+               lambda: Adam(lr=0.0002, beta_1=0.5))
+    mo.compile()
 
 
 def discrimator():
