@@ -56,7 +56,7 @@ def masks(batch_size, scales=[1.]):
     artist = MaskGridArtist()
     for masks in generate_grids(batch_size, generator, artist=artist,
                                    with_gird_params=True, scales=scales):
-        yield (masks[0].astype(floatX),) + masks[1:]
+        yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
 def tags_from_hdf5(fname):
