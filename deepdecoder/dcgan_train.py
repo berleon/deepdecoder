@@ -14,9 +14,12 @@
 import os
 import time
 
+import keras
+import theano
 from beesgrid.pybeesgrid import NUM_CONFIGS, NUM_MIDDLE_CELLS
 from beras.gan import GAN
-from deepdecoder import TAG_SIZE
+from beesgrid import TAG_SIZE, CONFIG_ROTS
+from beras.models import asgraph
 from keras import initializations
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.convolutional import Convolution2D
@@ -31,6 +34,7 @@ from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI
 from deepdecoder.mogan import MOGAN
 from deepdecoder.utils import loadRealData, binary_mask
 import theano.tensor as T
+import numpy as np
 
 class Deconvolution2D(Layer):
     def __init__(self, nb_filter, nb_row, nb_col,
@@ -89,7 +93,8 @@ def generator(nb_output_channels=1):
     model.add(BatchNormalization())
     model.add(Activation('relu'))
 
-    model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
+    model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
+                              border_mode=(2, 2)))
     model.add(Activation('sigmoid'))
     return model
 
@@ -135,22 +140,24 @@ def dcmogan(generator, discriminator, batch_size=128):
     mo.compile()
 
 
-def discrimator():
-    n = 32
+    return model
+
+def discriminator():
+    n = 64
     model = Sequential()
-    model.add(Convolution2D(n, 5, 5, subsample=(2, 2), border_mode='full',
+    model.add(Convolution2D(n, 5, 5, subsample=(2, 2), border_mode='same',
                             input_shape=(1, 64, 64)))
     model.add(LeakyReLU(0.2))
 
-    model.add(Convolution2D(2*n, 5, 5, subsample=(2, 2), border_mode='full'))
+    model.add(Convolution2D(2*n, 5, 5, subsample=(2, 2), border_mode='same'))
     model.add(BatchNormalization())
     model.add(LeakyReLU(0.2))
 
-    model.add(Convolution2D(4*n, 5, 5, subsample=(2, 2), border_mode='full'))
+    model.add(Convolution2D(4*n, 5, 5, subsample=(2, 2), border_mode='same'))
     model.add(BatchNormalization())
     model.add(LeakyReLU(0.2))
 
-    model.add(Convolution2D(8*n, 5, 5, subsample=(2, 2), border_mode='full'))
+    model.add(Convolution2D(8*n, 5, 5, subsample=(2, 2), border_mode='same'))
     model.add(BatchNormalization())
     model.add(LeakyReLU(0.2))
 
