@@ -85,6 +85,7 @@ def benchmark_loss_fn(loss_fn, *args, **kwargs):
         outs.extend(loss_dict.visual.values())
     return theano.function([mask, predicted], outs), loss_dict
 
+
 def compile_loss_fn(loss_fn, visualise=True, *args, **kwargs):
     mask = T.tensor4()
     predicted = T.tensor4()

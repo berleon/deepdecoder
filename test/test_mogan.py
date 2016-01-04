@@ -84,7 +84,7 @@ def test_mogan():
 
     def simple_gan():
         generator = Sequential()
-        generator.add(Dense(21, activation='relu',
+        generator.add(Dense(20, activation='relu',
                             input_dim=simple_gan_nb_z + simple_gan_nb_cond))
         generator.add(Dense(50, activation='relu'))
         generator.add(Dense(50, activation='relu'))
@@ -104,7 +104,8 @@ def test_mogan():
     mu2 = [1., 1.]
     sigma2 = 0.25
 
-    def loss_fn(y_true, y_predicted):
+    def loss_fn(y_true, g_outmap):
+        y_predicted = g_outmap['output']
         return mse(y_true, y_predicted)
 
     def data(bs=1024):

@@ -17,7 +17,8 @@ from keras.models import Sequential
 from theano.sandbox.cuda.basic_ops import gpu_contiguous, gpu_alloc_empty
 from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI
 
-from deepdecoder.dcgan_train import Deconvolution2D
+from deepdecoder.dcgan_train import Deconvolution2D, discriminator, generator, \
+    dcmogan
 import numpy as np
 import theano.tensor as T
 
@@ -56,3 +57,6 @@ def test_deconvolution2d():
     assert deconv_out.shape == (64, 10, 32, 32)
 
 
+def test_dcgan_mogan():
+    gan, _ = dcmogan(generator, discriminator)
+    gan.compile()

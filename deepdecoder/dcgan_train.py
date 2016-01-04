@@ -64,8 +64,8 @@ class Deconvolution2D(Layer):
         sets up dummy convolutional forward pass and uses its grad as deconv
         currently only tested/working with same padding
         """
-        img = gpu_contiguous(self.get_input(train))
-        kerns = gpu_contiguous(self.W)
+        img = self.get_input(train)
+        kerns = self.W
         sr, sc = self.subsample
         out = gpu_alloc_empty(img.shape[0], kerns.shape[1], img.shape[2]*sr, img.shape[3]*sc)
         desc = GpuDnnConvDesc(
@@ -99,48 +99,48 @@ def generator(nb_output_channels=1):
     return model
 
 
-def dcmogan(generator, discriminator, batch_size=128):
+def dcmogan(generator_fn, discriminator_fn, batch_size=128):
     nb_g_z = 20
-    nb_grid_config = NUM_CONFIGS + NUM_MIDDLE_CELLS
-    nb_g_input = nb_g_z + nb_grid_config
-    ff_generator = generator(nb_output_channels=2)
-    g = Graph()
+    nb_grid_config = NUM_CONFIGS + NUM_MIDDLE_CELLS + len(CONFIG_ROTS)
+    ff_generator = generator_fn(nb_output_channels=2)
+
     grid_config_shape = (batch_size, nb_grid_config)
-    grid_idx_shape = (batch_size, 1, TAG_SIZE, TAG_SIZE)
-
-    g.add_input("z", (nb_g_input, ))
+    g = Graph()
+    g.add_input("z", (nb_g_z, ))
     g.add_input("grid_config", grid_config_shape[1:])
-    g.add_input("grid_idx", grid_idx_shape[1:])
-    g.add_node(Dense(100, activation='relu'), "dense1",
-               inputs=["z", "dis_cond_1"])
-
-    g.add_node(Dense(generator.layers[0].shape[1:], activation='relu'),
-               "dense2", input="dense1")
-    g.add_node(Dense(1, activation='sigmoid'), "alpha", input="dense2",
-               create_output=True)
-    g.add_node(ff_generator, "dcgan", inputs="dense2")
+    g.add_node(Dense(ff_generator.layers[0].input_shape[1], activation='relu'), "dense1",
+               inputs=["z", "grid_config"], merge_mode='concat')
+    g.add_node(ff_generator, "dcgan", input="dense1")
     g.add_output("output", input="dcgan")
+    g.add_node(Dense(1, activation='sigmoid'), "alpha", input="dense1",
+               create_output=True)
 
     def reconstruct(g_outmap):
         g_out = g_outmap["output"]
         alpha = g_outmap["alpha"]
         alpha = 0.5*alpha + 0.5
-        m = g_out[:, 0]
-        v = g_out[:, 1]
-        return alpha * m + (1 - alpha) * v
+        alpha = alpha.reshape((batch_size, 1, 1, 1))
+        m = g_out[:, :1]
+        v = g_out[:, 1:]
+        return (alpha * m + (1 - alpha) * v).reshape((batch_size, 1, TAG_SIZE,
+                                                     TAG_SIZE))
 
-    def grid_loss(grid_idx, g_out):
-        m = g_out[:, 0]
+    grid_loss_weight = theano.shared(np.cast[np.float32](1))
+
+    def grid_loss(grid_idx, g_outmap):
+        g_out = g_outmap['output']
+        m = g_out[:, :1]
         b = binary_mask(grid_idx, ignore=0.0,  white=1.)
-        return mse(b, m)
+        return grid_loss_weight*mse(b, m)
 
-    gan = GAN(g, discrimator(), z_shape=(batch_size, nb_g_z), reconstruct_fn=reconstruct)
-    mo = MOGAN(gan, grid_loss, Adam(),
-               lambda: Adam(lr=0.0002, beta_1=0.5))
-    mo.compile()
+    gan = GAN(g, asgraph(discriminator_fn(), input_name=GAN.d_input),
+              z_shape=(batch_size, nb_g_z),
+              reconstruct_fn=reconstruct)
+    mogan = MOGAN(gan, grid_loss, lambda: Adam(lr=0.0002, beta_1=0.5),
+                  gan_regulizer=GAN.L2Regularizer())
 
+    return mogan, grid_loss_weight
 
-    return model
 
 def discriminator():
     n = 64
@@ -168,7 +168,8 @@ def discriminator():
 
 def load_gan(weight_dir=None):
     batch_size = 128
-    gan = GAN(generator(), discrimator(), z_shape=(batch_size, 50,))
+    gan = GAN(asgraph(generator()), asgraph(discriminator()),
+              z_shape=(batch_size, 50,))
     if weight_dir:
         weight_dir = os.path.realpath(weight_dir)
         if os.path.exists(weight_dir):
