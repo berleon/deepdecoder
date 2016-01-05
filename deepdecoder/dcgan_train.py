@@ -23,7 +23,7 @@ from beras.models import asgraph
 from keras import initializations
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.convolutional import Convolution2D
-from keras.layers.core import Dense, Layer, Reshape, Activation, Flatten, Lambda
+from keras.layers.core import Dense, Layer, Reshape, Activation, Flatten
 from keras.layers.normalization import BatchNormalization
 from keras.models import Sequential, Graph
 from keras.objectives import mse
@@ -33,8 +33,9 @@ from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI
 
 from deepdecoder.mogan import MOGAN
 from deepdecoder.utils import loadRealData, binary_mask
-import theano.tensor as T
 import numpy as np
+from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
+
 
 class Deconvolution2D(Layer):
     def __init__(self, nb_filter, nb_row, nb_col,
@@ -75,10 +76,10 @@ class Deconvolution2D(Layer):
         return d_img
 
 
-def generator(nb_output_channels=1):
+def generator(input_dim=50, nb_output_channels=1):
     n = 64
     model = Sequential()
-    model.add(Dense(8*n*4*4, input_dim=50))
+    model.add(Dense(8*n*4*4, input_dim=input_dim))
     model.add(Reshape((8*n, 4, 4,)))
 
     model.add(Deconvolution2D(4*n, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
@@ -99,18 +100,42 @@ def generator(nb_output_channels=1):
     return model
 
 
+def discriminator():
+    n = 64
+    model = Sequential()
+    model.add(TheanoConvolution2D(n, 5, 5, subsample=(2, 2), border_mode='full',
+                            input_shape=(1, 64, 64)))
+    model.add(LeakyReLU(0.2))
+
+    model.add(TheanoConvolution2D(2*n, 5, 5, subsample=(2, 2), border_mode='full'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(0.2))
+
+    model.add(TheanoConvolution2D(4*n, 5, 5, subsample=(2, 2), border_mode='full'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(0.2))
+
+    model.add(TheanoConvolution2D(8*n, 5, 5, subsample=(2, 2), border_mode='full'))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU(0.2))
+
+    model.add(Flatten())
+    model.add(Dense(1, activation='sigmoid'))
+    return model
+
+
 def dcmogan(generator_fn, discriminator_fn, batch_size=128):
     nb_g_z = 20
     nb_grid_config = NUM_CONFIGS + NUM_MIDDLE_CELLS + len(CONFIG_ROTS)
-    ff_generator = generator_fn(nb_output_channels=2)
+    ff_generator = generator_fn(input_dim=2*nb_g_z, nb_output_channels=2)
 
-    grid_config_shape = (batch_size, nb_grid_config)
     g = Graph()
     g.add_input("z", (nb_g_z, ))
-    g.add_input("grid_config", grid_config_shape[1:])
-    g.add_node(Dense(ff_generator.layers[0].input_shape[1], activation='relu'), "dense1",
-               inputs=["z", "grid_config"], merge_mode='concat')
-    g.add_node(ff_generator, "dcgan", input="dense1")
+    g.add_input("grid_config", (nb_grid_config, ))
+    g.add_node(Dense(nb_g_z, activation='relu'), "dense1",
+               input="grid_config")
+    g.add_node(ff_generator, "dcgan", inputs=["z", "dense1"],
+               merge_mode='concat')
     g.add_output("output", input="dcgan")
     g.add_node(Dense(1, activation='sigmoid'), "alpha", input="dense1",
                create_output=True)
@@ -123,7 +148,7 @@ def dcmogan(generator_fn, discriminator_fn, batch_size=128):
         m = g_out[:, :1]
         v = g_out[:, 1:]
         return (alpha * m + (1 - alpha) * v).reshape((batch_size, 1, TAG_SIZE,
-                                                     TAG_SIZE))
+                                                      TAG_SIZE))
 
     grid_loss_weight = theano.shared(np.cast[np.float32](1))
 
@@ -140,30 +165,6 @@ def dcmogan(generator_fn, discriminator_fn, batch_size=128):
                   gan_regulizer=GAN.L2Regularizer())
 
     return mogan, grid_loss_weight
-
-
-def discriminator():
-    n = 64
-    model = Sequential()
-    model.add(Convolution2D(n, 5, 5, subsample=(2, 2), border_mode='same',
-                            input_shape=(1, 64, 64)))
-    model.add(LeakyReLU(0.2))
-
-    model.add(Convolution2D(2*n, 5, 5, subsample=(2, 2), border_mode='same'))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(0.2))
-
-    model.add(Convolution2D(4*n, 5, 5, subsample=(2, 2), border_mode='same'))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(0.2))
-
-    model.add(Convolution2D(8*n, 5, 5, subsample=(2, 2), border_mode='same'))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU(0.2))
-
-    model.add(Flatten())
-    model.add(Dense(1, activation='sigmoid'))
-    return model
 
 
 def load_gan(weight_dir=None):
