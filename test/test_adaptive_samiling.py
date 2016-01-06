@@ -47,7 +47,7 @@ def test_curriculum_ids():
     output_dir = join(TEST_OUTPUT_DIR, "curriculum_grids")
     os.makedirs(output_dir, exist_ok=True)
     for h in np.linspace(0, 1, num=11):
-        grids = curriculum_grids(h, batch_size, artist=BlackWhiteArtist())
+        _, grids = curriculum_grids(h, batch_size, artist=BlackWhiteArtist())
         grid_img = tile(grids)
         print(grid_img.shape)
 
