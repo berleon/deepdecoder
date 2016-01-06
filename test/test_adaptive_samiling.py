@@ -30,15 +30,14 @@ def test_curriculum_config():
     d = config_distributions(0)
     configs = _config(d, batch_size)
     assert configs[:, CONFIG_ROTS].mean() <= 1e-5
-    assert abs(configs[:, CONFIG_RADIUS].mean() - d.radius_mean) <= 0.05
+    assert abs(configs[:, CONFIG_RADIUS].mean() - d.radius.mean) <= 0.05
 
-    for h in (0, 0.1, 0.5, 0.7, 1):
+    for h in (0., 0.1, 0.5, 0.7, 1.):
         d = config_distributions(h)
         configs = _config(d, batch_size)
-        assert configs[:, CONFIG_ROTS].mean() <= 0.05
-        assert (configs[:, CONFIG_ROTS[1]].std() - d.y_std) <= 0.05
-        assert (configs[:, CONFIG_ROTS[2]].std() - d.x_std) <= 0.05
-        assert abs(configs[:, CONFIG_RADIUS].mean() - d.radius_mean) <= 0.05
+        assert (configs[:, CONFIG_ROTS[1]].std() - d.y.std) <= 0.05
+        assert (configs[:, CONFIG_ROTS[2]].std() - d.x.std) <= 0.05
+        assert abs(configs[:, CONFIG_RADIUS].mean() - d.radius.mean) <= 0.05
 
 
 def test_curriculum_ids():
