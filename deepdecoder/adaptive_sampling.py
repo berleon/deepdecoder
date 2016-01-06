@@ -26,12 +26,11 @@ def to_radians(x):
 
 
 def config_distributions(l):
-    z_low, z_high = (-l*np.pi, l*np.pi)
+    z_low, z_high = (-np.pi, np.pi)
     y_mean, y_std = (0, l*to_radians(12))
     x_mean, x_std = (0, l*to_radians(10))
     center_mean, center_std = (0, 2)
     radius_mean, radius_std = (24.5, 1)
-    id_sigma = 1*(1.-l)
     d = DotMap(locals())
     return d
 
@@ -49,11 +48,7 @@ def _config(d, batch_size):
 
 
 def _sample_ids(sigma, batch_size):
-    ids = np.random.binomial(1, 0.5, (batch_size, NUM_MIDDLE_CELLS))
-    #id_idx = gaussian_filter1d(ids, sigma)
-    #simple_ids = np.zeros_like(ids)
-    #simple_ids[id_idx > 0.25] = 1.
-    return ids
+    return np.random.binomial(1, 0.5, (batch_size, NUM_MIDDLE_CELLS))
 
 
 def curriculum_grids(h, batch_size=128, scale=1., artist=None):
