@@ -73,7 +73,7 @@ def curriculum_grids(h, batch_size=128, scale=1., artist=None):
     grids = draw_grids(ids.astype(np.float32), configs.astype(np.float32),
                        scales=[scale], artist=artist)
     assert len(grids) == 1
-    return grids[0]
+    return np.concatenate([ids, configs], axis=1), grids[0]
 
 
 def curriculum_grids_generator(batch_size, learn_stepness=0.05,
