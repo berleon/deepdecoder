@@ -212,9 +212,20 @@ class CurriculumCallback(callbacks.Callback):
         super().__init__()
         self.curriculum = curriculum
         self.lecture_id = lecture_id
+        self.losses = []
+
+    def on_train_begin(self, log={}):
+        self.lecture_id.value = 0
+
+    def on_batch_end(self, batch, log={}):
+        self.losses.append(log['loss'])
+
+    def on_epoch_begin(self, epoch, log={}):
+        self.losses = []
 
     def on_epoch_end(self, epoch, log={}):
-        loss = log['loss']
+        nb_last_losses = 10
+        loss = np.array(self.losses[-nb_last_losses:]).mean()
         lecture_id = self.lecture_id.value
         lecture = self.curriculum[lecture_id]
         if lecture.has_passed(loss):

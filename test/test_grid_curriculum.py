@@ -88,20 +88,29 @@ def test_curriculum_generator_callback():
     gen = grid_generator(curriculum, lecture_id)
     next(gen)
     assert lecture_id.value == 0
-    cb.on_epoch_end(1, {'loss': 1000})
+    cb.on_train_begin()
+    cb.on_batch_end(0, {'loss': 1000})
+    cb.on_epoch_end(0)
     # loss to high, do not proceed into next lecture
     assert lecture_id.value == 0
 
-    cb.on_epoch_end(1, {'loss': 0})
+    cb.on_epoch_begin(1)
+    cb.on_batch_end(0, {'loss': 0})
+    cb.on_batch_end(1, {'loss': 0})
+    cb.on_epoch_end(1)
     # passed the lecture
     assert lecture_id.value == 1
 
-    cb.on_epoch_end(1, {'loss': 0})
+    cb.on_epoch_begin(2)
+    cb.on_batch_end(0, {'loss': 0})
+    cb.on_epoch_end(2)
     assert lecture_id.value == 2
 
-
-    cb.on_epoch_end(1, {'loss': 0})
+    cb.on_epoch_begin(3)
+    cb.on_batch_end(0, {'loss': 0})
+    cb.on_epoch_end(3, {'loss': 0})
     assert lecture_id.value == 2
+    assert cb.model.stop_training
 
 
 if __name__ == "__main__":
