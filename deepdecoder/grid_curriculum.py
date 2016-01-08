@@ -18,8 +18,7 @@ import multiprocessing
 import numpy as np
 from math import pi
 
-from beesgrid.pybeesgrid import NUM_MIDDLE_CELLS, MaskGridArtist
-from beesgrid import draw_grids
+from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist
 from keras.backend import epsilon
 from keras import callbacks
 
@@ -232,8 +231,8 @@ class CurriculumCallback(callbacks.Callback):
             if lecture_id + 1 >= len(self.curriculum):
                 self.model.stop_training = True
             else:
+                print("Begin with lecture #{}".format(lecture_id + 1))
                 self.lecture_id.value += 1
-
 
 def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
     if artist is None:
@@ -257,5 +256,5 @@ def grid_generator(curriculum, lecutre_id, batch_size=128, artist=None,
 def get_generator_and_callback(curriculum, batch_size=128, scale=1.):
     lecture_id = multiprocessing.Value('i', 0)
     cb = CurriculumCallback(curriculum, lecture_id)
-    gen = grid_generator(curriculum, lecture_id, batch_size, scale)
+    gen = grid_generator(curriculum, lecture_id, batch_size, scale=scale)
     return gen, cb
