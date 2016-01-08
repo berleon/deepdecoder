@@ -18,14 +18,22 @@ import multiprocessing
 import numpy as np
 from math import pi
 
-from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist
+from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist, TAG_SIZE
 from keras.backend import epsilon
 from keras import callbacks
+from dotmap import DotMap
 
 
 def to_radians(x):
     return x / 180. * np.pi
 
+DISTRIBUTION_PARAMS = DotMap({
+    'z': {'low':-pi, 'high': pi},
+    'y': {'mean': 0, 'std': to_radians(12)},
+    'x': {'mean': 0, 'std': to_radians(10)},
+    'center': {'mean': TAG_SIZE/2, 'std': 2},
+    'radius': {'mean': 24.5, 'std': 1},
+})
 
 class Distribution:
     def sample(self, shape):
@@ -211,19 +219,14 @@ def reduced_id_lecture(hardness, lecture=None):
 
 
 def exam():
+    d = DISTRIBUTION_PARAMS
     lec = Lecture()
     lec.name = 'exam'
-    lec.z = Uniform(-pi, pi)
-    print("Lecture()")
-    print_lecture(Lecture())
-    print("z_rot_lecture()")
-    print_lecture(z_rot_lecture(h))
-    print("Lecture() + z_rot_lecture())")
-    print_lecture(Lecture() + z_rot_lecture(h))
-    lec.y = Normal(0, to_radians(12))
-    lec.x = Normal(0, to_radians(10))
-    lec.center = Normal(0, 2)
-    lec.radius = Normal(24.5, 1)
+    lec.z = Uniform(d.z.low, d.z.high)
+    lec.y = Normal(d.y.mean, d.y.std)
+    lec.x = Normal(d.x.mean, d.x.std)
+    lec.center = Normal(d.center.mean, d.center.std)
+    lec.radius = Normal(d.radius.mean, d.radius.std)
     return lec
 
 
