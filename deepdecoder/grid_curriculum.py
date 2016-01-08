@@ -233,12 +233,15 @@ def exam():
 class CurriculumCallback(callbacks.Callback):
     def __init__(self, curriculum, lecture_id):
         super().__init__()
+        assert len(curriculum) >= 1
         self.curriculum = curriculum
         self.lecture_id = lecture_id
         self.losses = []
 
     def on_train_begin(self, log={}):
         self.lecture_id.value = 0
+        print("Begin with lecture #0 {}"
+              .format(self.curriculum[0].name))
 
     def on_batch_end(self, batch, log={}):
         self.losses.append(log['loss'])
@@ -250,12 +253,15 @@ class CurriculumCallback(callbacks.Callback):
         nb_last_losses = 10
         loss = np.array(self.losses[-nb_last_losses:]).mean()
         lecture_id = self.lecture_id.value
+        next_lecture_id = lecture_id + 1
         lecture = self.curriculum[lecture_id]
         if lecture.has_passed(loss):
-            if lecture_id + 1 >= len(self.curriculum):
+            if next_lecture_id >= len(self.curriculum):
                 self.model.stop_training = True
             else:
-                print("Begin with lecture #{}".format(lecture_id + 1))
+                print("Begin with lecture #{} {}"
+                      .format(next_lecture_id,
+                              self.curriculum[next_lecture_id].name))
                 self.lecture_id.value += 1
 
 def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
