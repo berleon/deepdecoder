@@ -27,13 +27,17 @@ from deepdecoder.grid_curriculum import Lecture, z_rot_lecture, \
 
 
 def test_lecture_add():
-    lec = Lecture()
+    def print_lecture(l):
+        params = ['z', 'x', 'y', 'ids', 'center', 'radius']
+        for p in params:
+            print("{}: {}".format(p, getattr(l, p)))
     h = 0.1
-    assert lec + z_rot_lecture(h) == z_rot_lecture(h)
-    zy_lec = y_rot_lecture(h) + z_rot_lecture(h)
+    assert Lecture() + z_rot_lecture(h) == z_rot_lecture(h)
+    assert (Lecture() + z_rot_lecture(h)).name == z_rot_lecture(h).name
+    zy_lec = z_rot_lecture(h) + y_rot_lecture(h)
     assert zy_lec.z == z_rot_lecture(h).z
     assert zy_lec.y == y_rot_lecture(h).y
-
+    assert zy_lec.name ==  z_rot_lecture(h).name + ' - ' + y_rot_lecture(h).name
 
 def test_lecture_sample():
     n = 128

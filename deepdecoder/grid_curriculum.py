@@ -65,6 +65,8 @@ class Normal(Distribution):
         return super().__eq__(other) and \
             self.mean == other.mean and self.std == other.std
 
+    def __neq__(self, other):
+        return not self.__eq__(other)
 
 class Uniform(Distribution):
     def __init__(self, low, high):
@@ -101,7 +103,7 @@ class Bernoulli(Distribution):
 
 
 class Lecture:
-    def __init__(self, pass_limit=0.01):
+    def __init__(self, pass_limit=0.01, name=''):
         self.z = Default(Zeros())
         self.x = Default(Zeros())
         self.y = Default(Zeros())
@@ -109,6 +111,7 @@ class Lecture:
         self.center = Default(Normal(25, 2))
         self.radius = Default(Normal(24.5, 1))
         self.pass_limit = pass_limit
+        self.name = name
 
     def grid_params(self, batch_size):
         col_shape = (batch_size, 1)
@@ -126,15 +129,22 @@ class Lecture:
 
     def __add__(self, other):
         params = ['z', 'x', 'y', 'ids', 'center', 'radius']
+        new_lecture = Lecture()
         for param in params:
             self_param = getattr(self, param)
             other_param = getattr(other, param)
             if type(self_param) == Default and type(other_param) != Default:
-                setattr(self, param, other_param)
+                setattr(new_lecture, param, other_param)
+            elif type(self_param) != Default and type(other_param) == Default:
+                setattr(new_lecture, param, self_param)
             elif type(self_param) != Default and type(other_param) != Default:
                 raise ValueError("Cannot combine two lectures with non Default"
                                  " Distribution on param {}".format(param))
-        return self
+        if self.name and other.name:
+            new_lecture.name = self.name + " - " + other.name
+        else:
+            new_lecture.name = self.name + other.name
+        return new_lecture
 
     def __eq__(self, other):
         params = ['z', 'x', 'y', 'ids', 'center', 'radius', 'pass_limit']
@@ -147,6 +157,7 @@ class Lecture:
 def z_rot_lecture(hardness, lecture=None):
     if lecture is None:
         lecture = Lecture()
+    lecture.name = 'z: {}'.format(hardness)
     lecture.z = Uniform(-hardness*pi, hardness*pi)
     return lecture
 
@@ -154,6 +165,7 @@ def z_rot_lecture(hardness, lecture=None):
 def y_rot_lecture(hardness, lecture=None):
     if lecture is None:
         lecture = Lecture()
+    lecture.name = 'y: {}'.format(hardness)
     lecture.y = Normal(0, hardness*to_radians(12))
     return lecture
 
@@ -161,6 +173,7 @@ def y_rot_lecture(hardness, lecture=None):
 def x_rot_lecture(hardness, lecture=None):
     if lecture is None:
         lecture = Lecture()
+    lecture.name = 'x: {}'.format(hardness)
     lecture.x = Normal(0, hardness*to_radians(10))
     return lecture
 
@@ -192,13 +205,21 @@ def reduced_id_lecture(hardness, lecture=None):
     if lecture is None:
         lecture = Lecture()
     nb_ids = math.ceil(hardness*2**NUM_MIDDLE_CELLS)
+    lecture.name = 'ids: {}'.format(hardness)
     lecture.ids = ReduceId(nb_ids)
     return lecture
 
 
 def exam():
     lec = Lecture()
+    lec.name = 'exam'
     lec.z = Uniform(-pi, pi)
+    print("Lecture()")
+    print_lecture(Lecture())
+    print("z_rot_lecture()")
+    print_lecture(z_rot_lecture(h))
+    print("Lecture() + z_rot_lecture())")
+    print_lecture(Lecture() + z_rot_lecture(h))
     lec.y = Normal(0, to_radians(12))
     lec.x = Normal(0, to_radians(10))
     lec.center = Normal(0, 2)
