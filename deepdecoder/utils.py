@@ -87,6 +87,17 @@ def visualise_tiles(images):
     plt.show()
 
 
+def rotate_by_multiple_of_90(img, rots):
+    def idx(pos):
+        return T.eq(rots, pos).nonzero()
+    return T.concatenate([
+        img[idx(0)][:, :, :, :],
+        img[idx(1)].swapaxes(2, 3)[:, :, ::-1, :],
+        img[idx(2)][:, :, ::-1, ::-1],
+        img[idx(3)].swapaxes(2, 3)[:, :, :, ::-1],
+    ])
+
+
 def zip_visualise_tiles(xs, ys):
     assert len(xs) == len(ys)
     tiles = []
