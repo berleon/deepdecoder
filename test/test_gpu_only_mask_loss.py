@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from test.config import visual_debug
 import itertools
 from functools import partial
 from timeit import Timer
@@ -28,15 +27,17 @@ from keras.layers.core import Dense, Reshape
 from keras.models import Sequential
 from keras.optimizers import Adam
 
-from deepdecoder.mask_loss import cuda_split_mask, theano_split_mask, mask_loss, \
-    median, mask_loss_sobel
+
+from deepdecoder.mask_loss import cuda_split_mask, theano_split_mask, \
+    mask_loss, median, mask_loss_sobel
+
 
 def masks(batch_size, scales=[1.]):
     batch_size += 64 - (batch_size % 64)
     generator = GridGenerator()
     artist = MaskGridArtist()
     for masks in generate_grids(batch_size, generator, artist=artist,
-                                   scales=scales):
+                                scales=scales):
         yield masks[0].astype(np.float32)
 
 
