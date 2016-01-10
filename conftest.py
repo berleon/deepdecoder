@@ -42,6 +42,8 @@ if not on_gpu():
 
 
 def plt_save_and_maybe_show(fname):
-    plt.savefig(os.path.join(TEST_OUTPUT_DIR, fname))
+    abs_fname = os.path.join(TEST_OUTPUT_DIR, fname)
+    os.makedirs(os.path.dirname(abs_fname), exist_ok=True)
+    plt.savefig(abs_fname)
     if visual_debug:
         plt.show()
