@@ -76,33 +76,3 @@ def dcmogan(generator_fn, discriminator_fn, batch_size=128):
 
     return mogan, grid_loss_weight
 
-
-def load_gan(weight_dir=None):
-    batch_size = 128
-    gan = GAN(asgraph(generator()), asgraph(discriminator()),
-              z_shape=(batch_size, 50,))
-    if weight_dir:
-        weight_dir = os.path.realpath(weight_dir)
-        if os.path.exists(weight_dir):
-            print("Loading weights from: " + weight_dir)
-            gan.load_weights(weight_dir + "/{}.hdf5")
-    return gan
-
-
-def train(args):
-    X = loadRealData(args.real)
-    gan = load_gan(args.weight_dir)
-    print("Compiling...")
-    start = time.time()
-
-    optimizer = lambda: Adam(lr=0.0002, beta_1=0.5)
-    gan.compile(optimizer(), optimizer())
-    print("Done Compiling in {0:.2f}s".format(time.time() - start))
-
-    try:
-        gan.fit(X, verbose=1, nb_epoch=1)
-    finally:
-        print("Saving model to {}".format(os.path.realpath(args.weight_dir)))
-        output_dir = args.weight_dir + "/{}.hdf5"
-        gan.save_weights(output_dir)
-
