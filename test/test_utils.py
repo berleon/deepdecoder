@@ -17,13 +17,19 @@ from deepdecoder.utils import rotate_by_multiple_of_90
 import keras.backend as K
 import numpy as np
 import matplotlib.pyplot as plt
+import pytest
 
 
-def test_util_rotate_by_multiple_of_90():
-    n = 4
-    batch = np.ones((n, 1, 8, 8), dtype=np.float32)
+@pytest.fixture
+def batch():
+    batch = np.ones((4, 1, 8, 8), dtype=np.float32)
     batch[:, :, :4, :4] = 0
     batch[:, :, 6:, :] = 0
+    return batch
+
+
+def test_util_rotate_by_multiple_of_90(batch):
+    n = len(batch)
     th_batch = K.variable(batch)
     rots = K.variable(np.array([0, 1, 2, 3]))
     rotated = rotate_by_multiple_of_90(th_batch, rots).eval()
@@ -39,3 +45,10 @@ def test_util_rotate_by_multiple_of_90():
     assert rotated.shape == batch.shape
     for i in range(n):
         assert (rotated[i, 0] == np.rot90(batch[i, 0], k=i)).all(), i
+
+
+def test_util_rotate_by_multiple_of_90_missing_rots(batch):
+    th_batch = K.variable(batch)
+    rots = K.variable(np.array([0, 0, 2, 2]))
+    rotated = rotate_by_multiple_of_90(th_batch, rots).eval()
+    assert rotated.shape == batch.shape
