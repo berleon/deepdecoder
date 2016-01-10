@@ -90,6 +90,7 @@ def visualise_tiles(images):
 def rotate_by_multiple_of_90(img, rots):
     def idx(pos):
         return T.eq(rots, pos).nonzero()
+    rots = rots.reshape((-1, ))
     return T.concatenate([
         img[idx(0)][:, :, :, :],
         img[idx(1)].swapaxes(2, 3)[:, :, ::-1, :],
