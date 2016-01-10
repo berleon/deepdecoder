@@ -13,11 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import test.config
-from test.config import TEST_OUTPUT_DIR
-
 import pytest
-import numpy as np
 from deepdecoder.model_utils import plot_weights_histogram, \
     add_uniform_noise
 from keras.models import Sequential
