@@ -13,25 +13,19 @@
 # limitations under the License.
 
 
-import os
-import time
-
-import keras
 import theano
-from beesgrid.pybeesgrid import NUM_CONFIGS, NUM_MIDDLE_CELLS
-from beras.gan import GAN
-from beesgrid import TAG_SIZE, CONFIG_ROTS
-from beras.models import asgraph
-from keras.models import Sequential, Graph
+from keras.models import Graph
+from keras.layers.core import Dense
 from keras.objectives import mse
 from keras.optimizers import Adam
-from theano.sandbox.cuda.basic_ops import gpu_alloc_empty, gpu_contiguous
-from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI
-
-from deepdecoder.mogan import MOGAN
-from deepdecoder.utils import loadRealData, binary_mask
 import numpy as np
-from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
+
+from beras.gan import GAN
+from beras.models import asgraph
+from beesgrid import TAG_SIZE, CONFIG_ROTS
+from beesgrid.pybeesgrid import NUM_CONFIGS, NUM_MIDDLE_CELLS
+from deepdecoder.mogan import MOGAN
+from deepdecoder.utils import binary_mask
 
 
 def dcmogan(generator_fn, discriminator_fn, batch_size=128):
@@ -75,4 +69,3 @@ def dcmogan(generator_fn, discriminator_fn, batch_size=128):
                   gan_regulizer=GAN.L2Regularizer())
 
     return mogan, grid_loss_weight
-
