@@ -28,12 +28,13 @@ def to_radians(x):
     return x / 180. * np.pi
 
 DISTRIBUTION_PARAMS = DotMap({
-    'z': {'low':-pi, 'high': pi},
+    'z': {'low': -pi, 'high': pi},
     'y': {'mean': 0, 'std': to_radians(12)},
     'x': {'mean': 0, 'std': to_radians(10)},
     'center': {'mean': TAG_SIZE/2, 'std': 2},
     'radius': {'mean': 24.5, 'std': 1},
 })
+
 
 class Distribution:
     def sample(self, shape):
@@ -75,6 +76,7 @@ class Normal(Distribution):
 
     def __neq__(self, other):
         return not self.__eq__(other)
+
 
 class Uniform(Distribution):
     def __init__(self, low, high):
@@ -263,6 +265,7 @@ class CurriculumCallback(callbacks.Callback):
                       .format(next_lecture_id,
                               self.curriculum[next_lecture_id].name))
                 self.lecture_id.value += 1
+
 
 def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
     if artist is None:

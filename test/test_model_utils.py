@@ -23,6 +23,7 @@ from deepdecoder.model_utils import plot_weights_histogram, \
 from keras.models import Sequential
 from keras.layers.core import Dense
 
+
 def test_plot_weights_histogram():
     model = Sequential()
     model.add(Dense(1000, input_dim=20))

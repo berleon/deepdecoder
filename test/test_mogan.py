@@ -12,20 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from keras.objectives import mse
 
-import test.config
-from test.config import TEST_OUTPUT_DIR
+from conftest import TEST_OUTPUT_DIR
 import os
-import random
 
 import keras
-import pytest
 from beras.gan import GAN
 from beras.models import asgraph
 from keras.layers.core import Dense
 from keras.models import Sequential
 from keras.optimizers import Adam
+from keras.objectives import mse
 
 from deepdecoder.mogan import MOGAN
 import keras.backend as K
@@ -35,7 +32,8 @@ import matplotlib.pyplot as plt
 
 
 class Plotter(keras.callbacks.Callback):
-    def __init__(self, data, sample_fn, outdir=TEST_OUTPUT_DIR + "/mogan_plot"):
+    def __init__(self, data, sample_fn,
+                 outdir=TEST_OUTPUT_DIR + "/mogan_plot"):
         super().__init__()
         self.X = data
         self.outdir = outdir
@@ -127,7 +125,10 @@ def test_mogan():
         return gan.generate(conditionals=[expec]), selection
 
     bs = simple_gan_batch_size*25
-    optimizer_lambda = lambda: Adam(lr=0.0002, beta_1=0.5)
+
+    def optimizer_lambda():
+        return Adam(lr=0.0002, beta_1=0.5)
+
     gan = simple_gan()
     mogan = MOGAN(gan, loss_fn, optimizer_lambda, gan_objective='mse')
     mogan.compile()
@@ -137,7 +138,3 @@ def test_mogan():
             [data(bs), expected_val, expected_val],
             batch_size=gan.batch_size, verbose=1, nb_epoch=100,
             callbacks=[Plotter(data(3000), sample_fn=generate)])
-
-
-
-

@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from test.config import visual_debug
-
-from keras.optimizers import Adam, SGD
+from keras.optimizers import SGD
 
 from deepdecoder.mutliple_objectives import MultipleObjectives
 import keras.backend as K

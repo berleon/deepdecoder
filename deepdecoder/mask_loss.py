@@ -27,16 +27,21 @@ import theano.tensor as T
 from beras.util import blur, sobel
 from beesgrid import MASK, MASK_BLACK, MASK_WHITE
 from dotmap import DotMap
-from keras.objectives import mse
 from pycuda.compiler import SourceModule
-from theano.misc.pycuda_utils import to_gpuarray, to_cudandarray
-from theano.sandbox.cuda import CudaNdarrayType
 import theano.misc.pycuda_init
 from deepdecoder.utils import binary_mask, adaptive_mask
 
+_has_cuda = True
+try:
+    from theano.misc.pycuda_utils import to_gpuarray, to_cudandarray
+    from theano.sandbox.cuda import CudaNdarrayType
+except ImportError:
+    _has_cuda = False
+
 
 def mask_split_kernel_code():
-    mask_split_file = os.path.join(os.path.dirname(__file__), 'cuda/mask_split.cu')
+    mask_split_file = os.path.join(os.path.dirname(__file__),
+                                   'cuda/mask_split.cu')
     with open(mask_split_file) as f:
         return f.read()
 
@@ -83,7 +88,7 @@ class SplitMaskGrad(theano.Op):
         image = contiguouse(image)
         inputs = [mask_idx, image]
         if str(og_sum) == "<DisconnectedType>" and \
-            str(og_pow) == "<DisconnectedType>":
+                str(og_pow) == "<DisconnectedType>":
             raise ValueError("At least sum or pow gradient must be provided")
 
         if str(og_sum) != "<DisconnectedType>":
@@ -186,7 +191,7 @@ class SplitMask(theano.Op):
             image_mask_split(mask_idx, image, np.int32(batch_size),
                              np.int32(s), self._sdata,
                              block=block, grid=grid)
-            sdata_as_theano= to_cudandarray(self._sdata)
+            sdata_as_theano = to_cudandarray(self._sdata)
             m = len(MASK)
             outputs[0][0] = sdata_as_theano[:m]
             outputs[1][0] = sdata_as_theano[m:2*m]
@@ -220,7 +225,7 @@ def theano_split_mask(mask_idx, image):
         splitted_list.append(tmp_image)
     splitted = T.stack(splitted_list)
     return splitted, splitted**2, \
-           count.reshape((len(MASK), shp[0], 1, 1, 1), ndim=5)
+        count.reshape((len(MASK), shp[0], 1, 1, 1), ndim=5)
 
 
 def mean_by_count(x, count, axis=0):
@@ -264,7 +269,8 @@ def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
     mean, var, count = split_to_mean_var(*split_fn(grid_idx, image))
 
     def slice_mean(slice):
-        return (mean[slice]*count[slice]).sum(axis=0) / count[slice].sum(axis=0)
+        return (mean[slice]*count[slice]).sum(axis=0) / \
+            count[slice].sum(axis=0)
 
     mask_keys = list(MASK.keys())
     ignore_idx = mask_keys.index("IGNORE")
@@ -300,7 +306,7 @@ def mask_loss_mse(grid_idx, image):
     loss = (diff[indicies.nonzero()]**2).mean()
     visual_diff = T.zeros_like(diff)
     visual_diff = T.set_subtensor(visual_diff[indicies.nonzero()],
-                             diff[indicies.nonzero()]**2)
+                                  diff[indicies.nonzero()]**2)
     return DotMap({
         'loss': loss,
         'visual': {
@@ -354,12 +360,14 @@ def mask_loss_sobel(grid_idx, image, impl='auto', diff_type='mse', scale=10.):
     })
 
 
-def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1., var_weight=4,):
+def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1.,
+              var_weight=4,):
     split_fn = get_split_mask_fn(impl)
     mean, var, count = split_to_mean_var(*split_fn(mask_image, image))
 
     def slice_mean(slice):
-        return (mean[slice]*count[slice]).sum(axis=0) / count[slice].sum(axis=0)
+        return (mean[slice]*count[slice]).sum(axis=0) / \
+            count[slice].sum(axis=0)
 
     mask_keys = list(MASK.keys())
     ignore_idx = mask_keys.index("IGNORE")
@@ -383,22 +391,27 @@ def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1., var_weig
         cell_mean = mean[cell_idx]
         cell_weight = count[cell_idx].sum()
         mean_tolerance = 0.10**2
-        mean_diff = T.maximum((color_mean - cell_mean)**2, mean_tolerance) - mean_tolerance
+        mean_diff = T.maximum((color_mean - cell_mean)**2, mean_tolerance) - \
+            mean_tolerance
         return T.switch(T.eq(count[cell_idx], 0),
                         T.zeros_like(black_mean),
                         cell_weight * (
                             mean_weight*mean_diff + var_weight*var[cell_idx]
                         ))
     for black_parts in MASK_BLACK:
-        cell_losses.append(cell_loss_fn(black_parts, black_mean, mean_weight, var_weight))
+        cell_losses.append(cell_loss_fn(black_parts, black_mean,
+                                        mean_weight, var_weight))
     for white_parts in MASK_WHITE:
         if white_parts == ["OUTER_WHITE_RING"]:
             cell_losses.append(cell_loss_fn(white_parts, white_mean,
                                             mean_weight/10, var_weight/40))
         else:
-            cell_losses.append(cell_loss_fn(white_parts, white_mean, mean_weight, var_weight))
+            cell_losses.append(cell_loss_fn(white_parts, white_mean,
+                                            mean_weight, var_weight))
 
-    cell_losses = [l / (count[:background_ring_idx].sum() + count[ignore_idx+1:].sum()) for l in cell_losses]
+    cell_losses = [l / (count[:background_ring_idx].sum() +
+                        count[ignore_idx+1:].sum())
+                   for l in cell_losses]
 
     cell_loss = sum(cell_losses)
     loss = black_white_loss + ring_loss + cell_loss
@@ -409,4 +422,3 @@ def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1., var_weig
         'ring_loss': scale*ring_loss,
         'cell_losses': scale*cell_losses,
     })
-

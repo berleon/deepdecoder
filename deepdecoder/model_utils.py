@@ -16,7 +16,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-
 def add_uniform_noise(model, std):
     for layer in model.layers:
         weights = layer.get_weights()
@@ -47,4 +46,3 @@ def plot_weights_histogram(model, bins=50):
         print(hist.shape)
         plt.plot(bin_edges[1:], hist)
         plt.show()
-

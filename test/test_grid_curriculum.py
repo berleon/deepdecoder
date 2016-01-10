@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import multiprocessing
 from unittest.mock import MagicMock
 
@@ -37,7 +38,9 @@ def test_lecture_add():
     zy_lec = z_rot_lecture(h) + y_rot_lecture(h)
     assert zy_lec.z == z_rot_lecture(h).z
     assert zy_lec.y == y_rot_lecture(h).y
-    assert zy_lec.name ==  z_rot_lecture(h).name + ' - ' + y_rot_lecture(h).name
+    assert zy_lec.name == z_rot_lecture(h).name + ' - ' \
+        + y_rot_lecture(h).name
+
 
 def test_lecture_sample():
     n = 128
