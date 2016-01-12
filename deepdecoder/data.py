@@ -13,11 +13,17 @@
 # limitations under the License.
 #
 
-from beesgrid import GridGenerator, MaskGridArtist
-from beesgrid import generate_grids
+from beesgrid import GridGenerator, MaskGridArtist, generate_grids, \
+    CONFIG_ROTS
+
 from math import pi
 import numpy as np
 import theano
+import itertools
+
+from deepdecoder.utils import np_binary_mask
+from deepdecoder.grid_curriculum import exam, Uniform, grids_from_lecture
+from dotmap import DotMap
 floatX = theano.config.floatX
 
 
@@ -36,3 +42,34 @@ def bins_for_z(z):
     return bins, z_diffs
 
 
+def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
+    generator = GridGenerator()
+    artist = MaskGridArtist()
+    gen_grids = generate_grids(batch_size, generator, artist=artist,
+                               with_gird_params=True, scales=scales)
+    if nb_batches == 'forever':
+        counter = itertools.count()
+    else:
+        counter = range(nb_batches)
+    for i in counter:
+        masks = next(gen_grids)
+        yield (masks[0].astype(floatX),) + tuple(masks[1:])
+
+
+def gen_diff_gan(batch_size=128):
+    def grid_exam_generator():
+        def lecture():
+            lec = exam()
+            lec.z = Uniform(pi/4, -pi/4)
+            return lec
+        while True:
+            yield grids_from_lecture(lecture(), batch_size)
+
+    for grid_params, grid_idx in grid_exam_generator():
+        z_bins = np.random.choice(4, batch_size)
+        yield DotMap({
+            'z_bins': z_bins,
+            'params': grid_params,
+            'grid_idx': grid_idx,
+            'grid_bw': np_binary_mask(grid_idx, ignore=0., white=0.5)
+        })

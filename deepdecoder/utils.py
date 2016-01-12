@@ -13,9 +13,8 @@
 # limitations under the License.
 import os
 
+from beesgrid import MASK
 import theano
-from beesgrid import MASK, MASK_BLACK, MASK_WHITE, GridGenerator, MaskGridArtist
-from beesgrid import generate_grids
 import h5py
 import numpy as np
 import theano.tensor as T
@@ -47,16 +46,6 @@ def adaptive_mask(mask, black=0.5, ignore=0.5, white=1.):
     bw = T.set_subtensor(bw[white_idx], t_white[white_idx])
     bw = T.set_subtensor(bw[black_idx], t_black[black_idx])
     return bw
-
-
-def masks(batch_size, scales=[1.]):
-    mini_batch = 64
-    batch_size += mini_batch - (batch_size % mini_batch)
-    generator = GridGenerator()
-    artist = MaskGridArtist()
-    for masks in generate_grids(batch_size, generator, artist=artist,
-                                   with_gird_params=True, scales=scales):
-        yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
 def tags_from_hdf5(fname):
@@ -104,5 +93,3 @@ def zip_visualise_tiles(xs, ys):
     tiles = []
     for i in range(len(xs)):
         tiles.append(xs[i])
-        tiles.append(ys[i])
-    visualise_tiles(tiles)
