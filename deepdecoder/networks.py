@@ -138,18 +138,18 @@ def diff_gan(generator, discriminator, batch_size=128, nb_z=20):
     g_graph.add_input('z', input_shape=z_shape[1:])
     g_graph.add_input('grid_params', input_shape=grid_params_shape)
     g_graph.add_input('grid_idx', input_shape=grid_shape)
-    g_graph.add_input('rot90', input_shape=(1, ))
+    g_graph.add_input('z_rot90', input_shape=(1, ))
     g_graph.add_node(generator, 'generator', inputs=['z', 'grid_params'])
     g_graph.add_output('output', input='generator')
-    g_graph.add_output('rot90', input='rot90')
+    g_graph.add_output('z_rot90', input='z_rot90')
     g_graph.add_output('grid_idx', input='grid_idx')
     d_graph = asgraph(discriminator, input_name=GAN.d_input)
 
     def add_diff(g_outmap):
         g_out = g_outmap["output"]
         grid_idx = g_outmap['grid_idx']
-        rot90 = g_outmap['rot90']
-        g_rotate = rotate_by_multiple_of_90(g_out, rot90)
+        z_rot90 = g_outmap['z_rot90']
+        g_rotate = rotate_by_multiple_of_90(g_out, z_rot90)
         alphas = binary_mask(grid_idx, black=0.5, ignore=1.0,  white=0.5)
         bw_mask = binary_mask(grid_idx, black=0., ignore=0,  white=0.5)
         return (alphas * g_rotate) + bw_mask
