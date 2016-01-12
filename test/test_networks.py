@@ -18,6 +18,7 @@ from keras.layers.core import Dense, Flatten, Reshape
 from keras.optimizers import Adam
 from beesgrid import TAG_SIZE
 from deepdecoder.networks import diff_gan, NB_GAN_GRID_PARAMS
+from deepdecoder.data import gen_diff_gan
 
 
 def test_networks_diff_gan():
@@ -33,3 +34,8 @@ def test_networks_diff_gan():
 
     gan = diff_gan(generator, discriminator, nb_z=nb_z)
     gan.compile(Adam(), Adam())
+    batch = next(gen_diff_gan(gan.batch_size * 10))
+    gan.fit(batch.grid_bw, {'grid_idx': batch.grid_idx,
+                            'z_rot90': batch.z_bins,
+                            'grid_params': batch.params},
+            nb_epoch=1, verbose=1)
