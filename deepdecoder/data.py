@@ -14,7 +14,8 @@
 #
 
 from beesgrid import GridGenerator, MaskGridArtist, generate_grids, \
-    CONFIG_ROTS
+    NUM_CONFIGS, NUM_MIDDLE_CELLS, CONFIG_LABELS, CONFIG_ROTS, CONFIG_RADIUS, \
+    CONFIG_CENTER, TAG_SIZE
 
 from math import pi
 import numpy as np
@@ -65,11 +66,21 @@ def gen_diff_gan(batch_size=128):
         while True:
             yield grids_from_lecture(lecture(), batch_size)
 
+    def angles_to_sin_cos(grid_params):
+        configs = grid_params[:, NUM_MIDDLE_CELLS:]
+        angles = configs[:, CONFIG_ROTS]
+        sin = np.sin(angles)
+        cos = np.cos(angles)
+        r = configs[:, (CONFIG_RADIUS,)] / 25. - 1
+        xy = configs[:, CONFIG_CENTER] / (TAG_SIZE/2) - 1
+        return np.concatenate(
+            [grid_params[:, :NUM_MIDDLE_CELLS], sin, cos, xy, r], axis=1)
+
     for grid_params, grid_idx in grid_exam_generator():
         z_bins = np.random.choice(4, batch_size)
         yield DotMap({
-            'z_bins': z_bins,
-            'params': grid_params,
+            'z_bins': z_bins[:, np.newaxis],
+            'params': angles_to_sin_cos(grid_params),
             'grid_idx': grid_idx,
             'grid_bw': np_binary_mask(grid_idx, ignore=0., white=0.5)
         })
