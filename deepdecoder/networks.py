@@ -149,9 +149,9 @@ def diff_gan(generator, discriminator, batch_size=128, nb_z=20):
         g_out = g_outmap["output"]
         grid_idx = g_outmap['grid_idx']
         z_rot90 = g_outmap['z_rot90']
-        g_rotate = rotate_by_multiple_of_90(g_out, z_rot90)
         alphas = binary_mask(grid_idx, black=0.5, ignore=1.0,  white=0.5)
         bw_mask = binary_mask(grid_idx, black=0., ignore=0,  white=0.5)
-        return (alphas * g_rotate) + bw_mask
+        combined = (alphas * g_out) + bw_mask
+        return rotate_by_multiple_of_90(combined, z_rot90)
 
     return GAN(g_graph, d_graph, z_shape, add_diff)
