@@ -88,6 +88,19 @@ def rotate_by_multiple_of_90(img, rots):
     ])
 
 
+def rotate_by_multiple_of_90(img, rots):
+    def idx(pos):
+        return T.eq(rots, pos).nonzero()
+    rots = rots.reshape((-1, ))
+    img = T.set_subtensor(img[idx(0)], img[idx(0)][:, :, :, :])
+    img = T.set_subtensor(img[idx(1)],
+                          img[idx(1)].swapaxes(2, 3)[:, :, ::-1, :])
+    img = T.set_subtensor(img[idx(2)], img[idx(2)][:, :, ::-1, ::-1])
+    img = T.set_subtensor(img[idx(3)],
+                          img[idx(3)].swapaxes(2, 3)[:, :, :, ::-1])
+    return img
+
+
 def zip_visualise_tiles(*arrs):
     import matplotlib.pyplot as plt
     assert len(arrs) >= 2
