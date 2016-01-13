@@ -93,3 +93,5 @@ def zip_visualise_tiles(xs, ys):
     tiles = []
     for i in range(len(xs)):
         tiles.append(xs[i])
+        tiles.append(ys[i])
+    visualise_tiles(tiles)
