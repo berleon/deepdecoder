@@ -57,6 +57,17 @@ def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
         yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
+def normalize_grid_params(grid_params):
+    configs = grid_params[:, NUM_MIDDLE_CELLS:]
+    angles = configs[:, CONFIG_ROTS]
+    sin = np.sin(angles)
+    cos = np.cos(angles)
+    r = configs[:, (CONFIG_RADIUS,)] / 25. - 1
+    xy = configs[:, CONFIG_CENTER] / (TAG_SIZE/2) - 1
+    return np.concatenate(
+        [grid_params[:, :NUM_MIDDLE_CELLS], sin, cos, xy, r], axis=1)
+
+
 gen_diff_all_outputs = ('grid_idx', 'grid_diff', 'grid_bw')
 
 
