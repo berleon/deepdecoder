@@ -252,8 +252,7 @@ class CurriculumCallback(callbacks.Callback):
         self.losses = []
 
     def on_epoch_end(self, epoch, log={}):
-        nb_last_losses = 10
-        loss = np.array(self.losses[-nb_last_losses:]).mean()
+        loss = np.array(self.losses).mean()
         lecture_id = self.lecture_id.value
         next_lecture_id = lecture_id + 1
         lecture = self.curriculum[lecture_id]
