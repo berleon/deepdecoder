@@ -14,7 +14,7 @@
 #
 
 from beesgrid import GridGenerator, MaskGridArtist, generate_grids, \
-    NUM_CONFIGS, NUM_MIDDLE_CELLS, CONFIG_LABELS, CONFIG_ROTS, CONFIG_RADIUS, \
+    NUM_MIDDLE_CELLS, CONFIG_ROTS, CONFIG_RADIUS, \
     CONFIG_CENTER, TAG_SIZE
 
 from math import pi
@@ -57,7 +57,10 @@ def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
         yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
-def gen_diff_gan(batch_size=128):
+gen_diff_all_outputs = ('grid_idx', 'grid_diff', 'grid_bw')
+
+
+def gen_diff_gan(batch_size=128, outputs=gen_diff_all_outputs):
     def grid_exam_generator():
         def lecture():
             lec = exam()
@@ -78,9 +81,14 @@ def gen_diff_gan(batch_size=128):
 
     for grid_params, grid_idx in grid_exam_generator():
         z_bins = np.random.choice(4, batch_size)
-        yield DotMap({
+        batch = DotMap({
             'z_bins': z_bins[:, np.newaxis],
             'params': angles_to_sin_cos(grid_params),
-            'grid_idx': grid_idx,
-            'grid_bw': np_binary_mask(grid_idx, ignore=0., white=0.5)
         })
+        if 'grid_idx' in outputs:
+            batch.grid_idx = grid_idx
+        if 'grid_diff' in outputs:
+            batch.grid_diff = np_binary_mask(grid_idx, ignore=0., white=0.5)
+        if 'grid_bw' in outputs:
+            batch.grid_bw = np_binary_mask(grid_idx)
+        yield batch
