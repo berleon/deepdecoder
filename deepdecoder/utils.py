@@ -88,10 +88,13 @@ def rotate_by_multiple_of_90(img, rots):
     ])
 
 
-def zip_visualise_tiles(xs, ys):
-    assert len(xs) == len(ys)
+def zip_visualise_tiles(*arrs):
+    assert len(arrs) >= 2
+    length = len(arrs[0])
+    for a in arrs:
+        assert len(a) == length, "all input arrays must have the same size"
     tiles = []
-    for i in range(len(xs)):
-        tiles.append(xs[i])
-        tiles.append(ys[i])
+    for i in range(length):
+        for a in arrs:
+            tiles.append(a[i])
     visualise_tiles(tiles)
