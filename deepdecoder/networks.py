@@ -128,7 +128,8 @@ def dcgan_discriminator():
 NB_GAN_GRID_PARAMS = NUM_CONFIGS + NUM_MIDDLE_CELLS + len(CONFIG_ROTS)
 
 
-def diff_gan(generator, discriminator, batch_size=128, nb_z=20):
+def gan_with_z_rot90_grid_idx(generator, discriminator,
+                              batch_size=128, nb_z=20, reconstruct_fn=None):
     nb_grid_params = NB_GAN_GRID_PARAMS
     z_shape = (batch_size, nb_z)
     grid_shape = (1, TAG_SIZE, TAG_SIZE)
@@ -144,7 +145,10 @@ def diff_gan(generator, discriminator, batch_size=128, nb_z=20):
     g_graph.add_output('z_rot90', input='z_rot90')
     g_graph.add_output('grid_idx', input='grid_idx')
     d_graph = asgraph(discriminator, input_name=GAN.d_input)
+    return GAN(g_graph, d_graph, z_shape, reconstruct_fn=reconstruct_fn)
 
+
+def gan_add_bw_grid(generator, discriminator, batch_size=128, nb_z=20):
     def add_diff(g_outmap):
         g_out = g_outmap["output"]
         grid_idx = g_outmap['grid_idx']
@@ -153,5 +157,6 @@ def diff_gan(generator, discriminator, batch_size=128, nb_z=20):
         bw_mask = binary_mask(grid_idx, black=0., ignore=0,  white=0.5)
         combined = (alphas * g_out) + bw_mask
         return rotate_by_multiple_of_90(combined, z_rot90)
-
-    return GAN(g_graph, d_graph, z_shape, add_diff)
+    return gan_with_z_rot90_grid_idx(
+        generator, discriminator, batch_size=batch_size,
+        nb_z=nb_z, reconstruct_fn=add_diff)
