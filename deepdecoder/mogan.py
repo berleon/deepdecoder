@@ -53,3 +53,15 @@ class MOGAN:
     def compile(self):
         self.gan._compile_generate(self.build_dict)
         self.mulit_objectives.compile(self.optimizer_fn)
+
+    def fit(self, input_dict, batch_size=128, nb_epoch=100, verbose=0,
+            nb_iterations=None, callbacks=None, shuffles=True):
+        inputs = [input_dict['real'], input_dict['grid_bw']]
+        del input_dict['real']
+        del input_dict['grid_bw']
+        inputs.extend(self.gan._conditionals_to_list(input_dict))
+
+        self.mulit_objectives.fit(
+            inputs, batch_size=batch_size, nb_epoch=nb_epoch, verbose=verbose,
+            nb_iterations=nb_iterations, callbacks=callbacks,
+            shuffles=shuffles)
