@@ -139,7 +139,7 @@ def diff_gan(generator, discriminator, batch_size=128, nb_z=20):
     g_graph.add_input('grid_params', input_shape=grid_params_shape)
     g_graph.add_input('grid_idx', input_shape=grid_shape)
     g_graph.add_input('z_rot90', input_shape=(1, ))
-    g_graph.add_node(generator, 'generator', inputs=['z', 'grid_params'])
+    g_graph.add_node(generator, 'generator', inputs=['grid_params', 'z'])
     g_graph.add_output('output', input='generator')
     g_graph.add_output('z_rot90', input='z_rot90')
     g_graph.add_output('grid_idx', input='grid_idx')
