@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+from conftest import on_gpu
 from keras.models import Sequential
 from keras.layers.core import Dense, Flatten, Reshape
 from keras.optimizers import Adam
 from beesgrid import TAG_SIZE
-from deepdecoder.networks import diff_gan, NB_GAN_GRID_PARAMS
+from deepdecoder.networks import diff_gan, NB_GAN_GRID_PARAMS, \
+    mogan_learn_bw_grid, dcgan_generator, dcgan_discriminator
 from deepdecoder.data import gen_diff_gan
+import pytest
 
 
 def test_networks_diff_gan():
@@ -39,3 +41,9 @@ def test_networks_diff_gan():
                             'z_rot90': batch.z_bins,
                             'grid_params': batch.params},
             nb_epoch=1, verbose=1)
+
+
+@pytest.mark.skipif(not on_gpu(), reason="only works with cuda")
+def test_mogan_learn_bw_grid():
+    gan, _ = mogan_learn_bw_grid(dcgan_generator, dcgan_discriminator)
+    gan.compile()
