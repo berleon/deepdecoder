@@ -131,6 +131,136 @@ def dcgan_discriminator(n=32):
     return model
 
 
+def dcgan_seperated_generator(input_dim=40, model_generator=None,
+                              variation_generator=None):
+    if model_generator is None:
+        model_generator = dcgan_generator(input_dim)
+    if variation_generator is None:
+        variation_generator = dcgan_generator(input_dim, include_last_layer=False)
+
+    g = Graph()
+    g.add_input('input', input_shape=(input_dim,))
+    g.add_node(model_generator, 'model', input='input')
+    g.add_node(variation_generator, 'variation', input='input')
+    g.add_node(Deconvolution2D(1, 5, 5, subsample=(2, 2), border_mode=(2, 2)),
+              'variation_deconv', input='variation')
+    g.add_node(Activation('sigmoid'), 'variation_out', input='variation_deconv')
+    g.add_output('output', inputs=['model', 'variation_out'], concat_axis=1)
+    return g
+
+
+def dcgan_variational_add_generator(nb_z=40, n=16):
+    g = Graph()
+
+    class Disconnected(Layer):
+        def get_output(self, train=True):
+            input = self.get_input(train)
+            return theano.gradient.disconnected_grad(input)
+
+    class Builder:
+        def __init__(self, g):
+            self.g = g
+            self.outputs = ['input']
+            self.next_input = ''
+            self.join_cnt = 0
+            self.deconv_filter = n*4
+            self.vi = 0
+            self.mi = 0
+
+        def v(self):
+            name = 'var_{}'.format(self.vi)
+            self.vi += 1
+            return name
+
+        def m(self):
+            name = 'model_{}'.format(self.mi)
+            self.mi += 1
+            return name
+
+        def add_output(self, name):
+            self.outputs.append(name)
+            return name
+
+        def get_input(self):
+            if self.next_input:
+                tmp = copy.copy(self.next_input)
+                self.next_input = ''
+                return tmp
+            else:
+                return self.outputs[-1]
+
+        def set_input(self, name):
+            self.next_input = name
+
+        def project(self, name):
+            dense_name = name + '_dense'
+            self.g.add_node(Dense(8*n*4*4), dense_name,
+                            input=self.get_input())
+            reshape_name = name + '_reshape'
+            self.g.add_node(Reshape((8*n, 4, 4,)), reshape_name,
+                            input=dense_name)
+            return self.add_output(reshape_name)
+
+        def deconv(self, name, batch_norm=True, activation='relu'):
+            deconv = name + "_deconv"
+            batch = name + "_batch_norm"
+            act = name + "_" + activation
+            self.g.add_node(Deconvolution2D(
+                self.deconv_filter, 5, 5, subsample=(2, 2),
+                border_mode=(2, 2)),
+                            deconv, input=self.get_input())
+            if batch_norm:
+                self.g.add_node(BatchNormalization(), batch, input=deconv)
+                act_in = batch
+            else:
+                act_in = deconv
+            self.g.add_node(Activation(activation), act, input=act_in)
+            return self.add_output(act)
+
+        def join(self, mo, vo):
+            name = 'join_{}'.format(self.join_cnt)
+            self.join_cnt += 1
+            disconn = mo + '_disconn'
+            self.g.add_node(Disconnected(), disconn, input=mo)
+            self.g.add_node(Layer(), name, inputs=[disconn, vo],
+                            concat_axis=1)
+            return self.add_output(name)
+
+    g.add_input('input', input_shape=(nb_z,))
+    b = Builder(g)
+    vo = b.project(b.v())
+    b.set_input('input')
+    mo = b.project(b.m())
+    b.join(mo, vo)
+
+    vo = b.deconv(b.v())
+    b.set_input(mo)
+    mo = b.deconv(b.m())
+
+    b.deconv_filter //= 2
+
+    b.join(mo, vo)
+    vo = b.deconv(b.v())
+    b.set_input(mo)
+    mo = b.deconv(b.m())
+
+    b.deconv_filter //= 2
+
+    b.join(mo, vo)
+    vo = b.deconv(b.v())
+    b.set_input(mo)
+    mo = b.deconv(b.m())
+
+    b.deconv_filter = 1
+
+    b.join(mo, vo)
+    v_out = b.deconv(b.v(), batch_norm=False, activation='sigmoid')
+    b.set_input(mo)
+    m_out = b.deconv(b.m(), batch_norm=False, activation='sigmoid')
+
+    g.add_output('output', inputs=[m_out, v_out], concat_axis=1)
+    return g
+
 NB_GAN_GRID_PARAMS = NUM_CONFIGS + NUM_MIDDLE_CELLS + len(CONFIG_ROTS)
 
 
