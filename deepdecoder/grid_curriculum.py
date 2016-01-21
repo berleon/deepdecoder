@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import math
-import multiprocessing
+import threading
 
 import numpy as np
 from math import pi
@@ -233,15 +233,15 @@ def exam():
 
 
 class CurriculumCallback(callbacks.Callback):
-    def __init__(self, curriculum, lecture_id):
+    def __init__(self, curriculum):
         super().__init__()
         assert len(curriculum) >= 1
         self.curriculum = curriculum
-        self.lecture_id = lecture_id
+        self.lecture_id = 0
         self.losses = []
 
     def on_train_begin(self, log={}):
-        self.lecture_id.value = 0
+        self.lecture_id = 0
         print("Begin with lecture #0 {}"
               .format(self.curriculum[0].name))
 
@@ -253,7 +253,7 @@ class CurriculumCallback(callbacks.Callback):
 
     def on_epoch_end(self, epoch, log={}):
         loss = np.array(self.losses).mean()
-        lecture_id = self.lecture_id.value
+        lecture_id = self.lecture_id
         next_lecture_id = lecture_id + 1
         lecture = self.curriculum[lecture_id]
         if lecture.has_passed(loss):
@@ -263,7 +263,7 @@ class CurriculumCallback(callbacks.Callback):
                 print("Begin with lecture #{} {}"
                       .format(next_lecture_id,
                               self.curriculum[next_lecture_id].name))
-                self.lecture_id.value += 1
+                self.lecture_id += 1
 
 
 def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
