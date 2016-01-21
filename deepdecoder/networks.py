@@ -15,7 +15,8 @@
 
 from keras.models import Sequential, Graph
 from keras.objectives import mse
-from keras.layers.core import Dense, Dropout, Flatten, Reshape, Activation
+from keras.layers.core import Dense, Dropout, Flatten, Reshape, Activation, \
+    Layer
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.normalization import BatchNormalization
@@ -28,7 +29,9 @@ from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
 from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
 from deepdecoder.mogan import MOGAN
 import theano
+import theano.tensor as T
 import numpy as np
+import copy
 
 
 def get_decoder_model():
@@ -78,8 +81,7 @@ def get_decoder_model():
     return model
 
 
-def dcgan_generator(input_dim=50, nb_output_channels=1):
-    n = 64
+def dcgan_generator(n = 32, input_dim=50, nb_output_channels=1, include_last_layer=True):
     model = Sequential()
     model.add(Dense(8*n*4*4, input_dim=input_dim))
     model.add(Reshape((8*n, 4, 4,)))
@@ -96,14 +98,14 @@ def dcgan_generator(input_dim=50, nb_output_channels=1):
     model.add(BatchNormalization())
     model.add(Activation('relu'))
 
-    model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
-                              border_mode=(2, 2)))
-    model.add(Activation('sigmoid'))
+    if include_last_layer:
+        model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
+                                  border_mode=(2, 2)))
+        model.add(Activation('sigmoid'))
     return model
 
 
-def dcgan_discriminator():
-    n = 64
+def dcgan_discriminator(n=32):
     model = Sequential()
     model.add(TheanoConvolution2D(n, 5, 5, subsample=(2, 2),
                                   border_mode='full', input_shape=(1, 64, 64)))
