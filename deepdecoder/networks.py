@@ -170,26 +170,32 @@ def gan_add_bw_grid(generator, discriminator, batch_size=128, nb_z=20):
 
 def mogan_learn_bw_grid(generator, discriminator, optimizer_fn,
                         batch_size=128, nb_z=20):
+    variation_weight = 0.3
+
     def reconstruct(g_outmap):
         g_out = g_outmap["output"]
         grid_idx = g_outmap["grid_idx"]
         z_rot90 = g_outmap['z_rot90']
-        alphas = binary_mask(grid_idx, black=0.5, ignore=1.0, white=0.5)
-        m = g_out[:, :1]
+        alphas = binary_mask(grid_idx, black=variation_weight,
+                             ignore=1.0, white=variation_weight)
+        m = theano.gradient.disconnected_grad(g_out[:, :1])
         v = g_out[:, 1:]
-        combined = 0.5*m + alphas*v
+        combined = v  # T.clip(m + alphas*v, 0., 1.)
         return rotate_by_multiple_of_90(combined, z_rot90)
 
     grid_loss_weight = theano.shared(np.cast[np.float32](1))
 
-    def grid_loss(grid_idx, g_outmap):
+    def grid_loss(g_outmap):
         g_out = g_outmap['output']
+        grid_idx = g_outmap["grid_idx"]
         m = g_out[:, :1]
-        b = binary_mask(grid_idx, ignore=0.0,  white=1.)
+        b = binary_mask(grid_idx, ignore=0, black=0,
+                        white=1 - variation_weight)
         return grid_loss_weight*mse(b, m)
 
     gan = gan_with_z_rot90_grid_idx(generator, discriminator,
-                                    batch_size=batch_size, nb_z=nb_z)
+                                    batch_size=batch_size, nb_z=nb_z,
+                                    reconstruct_fn=reconstruct)
     mogan = MOGAN(gan, grid_loss, optimizer_fn,
                   gan_regulizer=GAN.L2Regularizer())
     return mogan, grid_loss_weight
