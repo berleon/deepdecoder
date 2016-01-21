@@ -25,7 +25,6 @@ class MOGAN:
                  gan_objective=binary_crossentropy,
                  gan_regulizer=None):
         assert len(gan.conditionals) >= 1
-        y_true = K.placeholder(shape=gan.G.outputs["output"].output_shape)
         v = gan.build_loss(objective=gan_objective)
         inputs = [v.real, y_true] + v.gen_conditionals
         cond_loss = loss_fn(y_true, v.g_outmap)
