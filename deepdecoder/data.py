@@ -21,9 +21,11 @@ from math import pi
 import numpy as np
 import theano
 import itertools
+import h5py
 
 from deepdecoder.utils import np_binary_mask
 from deepdecoder.grid_curriculum import exam, Uniform, grids_from_lecture
+from beras.data_utils import HDF5Tensor
 from dotmap import DotMap
 floatX = theano.config.floatX
 
@@ -93,3 +95,13 @@ def gen_diff_gan(batch_size=128, outputs=gen_diff_all_outputs):
         if 'grid_bw' in outputs:
             batch.grid_bw = np_binary_mask(grid_idx)
         yield batch
+
+
+def load_real_hdf5_tags(fname, batch_size, batches_per_epochs):
+    h5 = h5py.File(fname, 'r')
+    epoch_size = batches_per_epochs*batch_size
+    nb_tags = h5['tags'].shape[0]
+    nb_tags = (nb_tags // epoch_size)*epoch_size
+    tags = HDF5Tensor(fname, 'tags', 0, nb_tags)
+    assert len(tags) % epoch_size == 0
+    return tags
