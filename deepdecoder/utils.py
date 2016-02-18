@@ -13,12 +13,14 @@
 # limitations under the License.
 import os
 
+import itertools
 from beesgrid import MASK
 import theano
 import h5py
 import numpy as np
 import theano.tensor as T
-from beras.util import tile
+from beras.util import tile, downsample, upsample, resize_interpolate, \
+    smooth
 
 floatX = theano.config.floatX
 
@@ -116,3 +118,68 @@ def zip_visualise_tiles(*arrs):
     assert len(tiled) == 1, "currently only grayscale image are supported"
     plt.imshow(tiled[0], cmap='gray')
     plt.show()
+
+
+def pyramid_expand(image, sigma=2/3):
+    """
+    Upsample and then smooth image.
+    :image: array
+    :upscale: float, optional
+    :sigma:  Sigma for Gaussian filter. Default is 2 / 3 which
+    corresponds to a filter mask twice the size of the scale factor that covers
+    more than 99% of the Gaussian distribution.
+    """
+    return upsample(image, sigma)
+
+
+def pyramid_reduce(image, sigma=2/3):
+    return resize_interpolate(smooth(image, sigma), scale=2)
+
+
+def pyramid_gaussian(image, max_layer):
+    yield image
+    layer = 1
+    prev_image = image
+    while layer != max_layer:
+        layer += 1
+        layer_image = pyramid_reduce(prev_image)
+        yield layer_image
+        prev_image = layer_image
+
+
+def blend_pyramid(a, b, mask, weights):
+    """TODO: Docstring for function.
+
+    :weights: dictionary with {scale: weight}
+    :returns: TODO
+
+    """
+    def pairwise(iterable):
+        prev = None
+        for elem in iterable:
+            if prev is not None:
+                yield prev, elem
+            prev = elem
+
+    def laplace_pyramid(gauss_pyr):
+        return [high - upsample(low)
+                for high, low in pairwise(gauss_pyr)]
+    max_layer = max(weights.keys())
+    gauss_pyr_a = list(pyramid_gaussian(a, max_layer))
+    gauss_pyr_b = list(pyramid_gaussian(b, max_layer))
+    gauss_pyr_mask = list(pyramid_gaussian(mask, max_layer))
+    lap_pyr_a = laplace_pyramid(gauss_pyr_a) + gauss_pyr_a[-1:]
+    lap_pyr_b = laplace_pyramid(gauss_pyr_b) + gauss_pyr_b[-1:]
+
+    blend_pyr = []
+    for s, weight in weights.items():
+        mask = gauss_pyr_mask[s]
+        blend = lap_pyr_a[s]*mask + lap_pyr_b[s]*(1-mask)
+        blend_pyr.append(blend)
+
+    img = None
+    for low, high in pairwise(reversed(blend_pyr)):
+        if img is None:
+            img = low
+        img = upsample(img) + high
+    return img
