@@ -76,6 +76,7 @@ def test_util_benchmark_blending_pyramid(blend_images, blend_pyramid_fn):
     print("need {:.5f}s to blend. batch size: {}".format(t.timeit(n) / n, bs))
 
 
+@pytest.mark.slow
 def test_util_blending_pyramid(blend_images, blend_pyramid_fn):
     orange, apple, mask = blend_images
     print(orange.shape)
