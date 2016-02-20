@@ -10,11 +10,13 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
+
 # limitations under the License.
 
 from keras import initializations
 from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI, \
     gpu_alloc_empty
+from theano.sandbox.cuda.basic_ops import host_from_gpu
 from keras.layers.core import Layer
 
 
@@ -56,4 +58,4 @@ class Deconvolution2D(Layer):
             border_mode=self.border_mode, subsample=self.subsample,
             conv_mode='conv')(out.shape, kerns.shape)
         d_img = GpuDnnConvGradI()(kerns, img, out, desc)
-        return d_img
+        return host_from_gpu(d_img)
