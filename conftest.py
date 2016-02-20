@@ -24,6 +24,7 @@ if not visual_debug:
 
 import theano
 import matplotlib.pyplot as plt
+import scipy.misc
 
 
 def on_gpu():
@@ -41,9 +42,17 @@ if not on_gpu():
                 collect_ignore.append(os.path.join(path, f))
 
 
+def imsave(fname, image):
+    abs_fname = os.path.join(TEST_OUTPUT_DIR, fname)
+    os.makedirs(os.path.dirname(abs_fname), exist_ok=True)
+    scipy.misc.imsave(abs_fname, image)
+
+
 def plt_save_and_maybe_show(fname):
     abs_fname = os.path.join(TEST_OUTPUT_DIR, fname)
     os.makedirs(os.path.dirname(abs_fname), exist_ok=True)
     plt.savefig(abs_fname)
     if visual_debug:
         plt.show()
+    else:
+        plt.clf()
