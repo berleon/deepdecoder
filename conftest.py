@@ -24,7 +24,12 @@ if not visual_debug:
 
 import theano
 import matplotlib.pyplot as plt
+import numpy as np
 import scipy.misc
+import pytest
+import skimage
+import skimage.data
+import skimage.color
 
 
 def on_gpu():
@@ -56,3 +61,10 @@ def plt_save_and_maybe_show(fname):
         plt.show()
     else:
         plt.clf()
+
+
+@pytest.fixture
+def astronaut():
+    astronaut = skimage.color.rgb2gray(skimage.data.astronaut())
+    astronaut /= 255
+    return astronaut[np.newaxis, np.newaxis]
