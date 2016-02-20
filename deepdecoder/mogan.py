@@ -26,6 +26,7 @@ class MOGAN:
                  gan_regulizer=None):
         assert len(gan.conditionals) >= 1
         v = gan.build_loss(objective=gan_objective)
+        y_true = K.placeholder(shape=gan.G.outputs["output"].output_shape)
         inputs = [v.real, y_true] + v.gen_conditionals
         cond_loss = loss_fn(y_true, v.g_outmap)
         gan.build_opt_d(optimizer_fn(), v)
