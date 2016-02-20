@@ -122,7 +122,7 @@ def test_mogan():
 
     def generate():
         expec, selection = expected(simple_gan_batch_size)
-        return gan.generate(conditionals=[expec]), selection
+        return gan.generate(conditionals={'cond': expec}), selection
 
     bs = simple_gan_batch_size*25
 
