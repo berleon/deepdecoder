@@ -30,6 +30,7 @@ from dotmap import DotMap
 from pycuda.compiler import SourceModule
 import theano.misc.pycuda_init
 from deepdecoder.utils import binary_mask, adaptive_mask
+from deepdecoder.transform import pyramid_gaussian
 
 _has_cuda = True
 try:
@@ -264,7 +265,7 @@ def median(grid_split_image, grid_counts):
     return medians
 
 
-def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
+def segment_means(grid_idx, image, impl='auto'):
     split_fn = get_split_mask_fn(impl)
     mean, var, count = split_to_mean_var(*split_fn(grid_idx, image))
 
@@ -276,6 +277,12 @@ def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
     ignore_idx = mask_keys.index("IGNORE")
     black_mean = slice_mean(slice(0, ignore_idx))
     white_mean = slice_mean(slice(ignore_idx+1, None))
+    ignore_mean = slice_mean(slice(ignore_idx, ignore_idx+2))
+    return black_mean, white_mean, ignore_mean
+
+
+def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
+    black_mean, white_mean, _ = segment_means(grid_idx, image, impl)
     white_mean = T.maximum(white_mean, 0.40)
     white_mean = T.maximum(white_mean, black_mean + 0.20)
     black_mean = T.minimum(white_mean - 0.20, black_mean)
@@ -421,4 +428,33 @@ def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1.,
         'black_white_loss': scale*black_white_loss,
         'ring_loss': scale*ring_loss,
         'cell_losses': scale*cell_losses,
+    })
+
+
+def pyramid_loss(grid_idx, image):
+    indicies = T.bitwise_and(T.neq(grid_idx, MASK["IGNORE"]),
+                             T.neq(grid_idx, MASK["BACKGROUND_RING"]))
+
+    black_mean, white_mean, ignore_mean = segment_means(grid_idx, image)
+
+    bw = adaptive_mask(grid_idx, ignore=ignore_mean, black=black_mean,
+                       white=white_mean)
+    loss = - T.minimum(white_mean - black_mean, 0)
+    loss += T.exp(-(white_mean - black_mean)**2 / 0.2**2)
+    max_layer = 3
+    gauss_pyr_bw = pyramid_gaussian(bw, max_layer)
+    gauss_pyr_image = pyramid_gaussian(image, max_layer)
+    diff = gauss_pyr_bw[-1] - gauss_pyr_image[-1]
+    loss += (diff[indicies.nonzero()]**2).mean()
+    visual_diff = T.zeros_like(diff)
+    visual_diff = T.set_subtensor(visual_diff[indicies.nonzero()],
+                                  diff[indicies.nonzero()]**2)
+    return DotMap({
+        'loss': loss,
+        'visual': {
+            'diff': visual_diff,
+            'bw_grid': bw,
+            'gauss_pyr_bw': gauss_pyr_bw,
+            'gauss_pyr_image': gauss_pyr_image
+        }
     })
