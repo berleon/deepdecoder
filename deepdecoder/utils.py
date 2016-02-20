@@ -1,4 +1,5 @@
 # Copyright 2015 Leon Sixt
+
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,13 +14,12 @@
 # limitations under the License.
 import os
 
-import itertools
 from beesgrid import MASK
 import theano
 import h5py
 import numpy as np
 import theano.tensor as T
-from beras.util import tile, downsample, upsample, resize_interpolate, \
+from beras.util import tile, upsample, resize_interpolate, \
     smooth
 
 floatX = theano.config.floatX
@@ -147,7 +147,7 @@ def pyramid_gaussian(image, max_layer):
         prev_image = layer_image
 
 
-def blend_pyramid(a, b, mask, weights):
+def blend_pyramid(a, b, mask, num_layers=None, weights=None):
     """TODO: Docstring for function.
 
     :weights: dictionary with {scale: weight}
@@ -164,22 +164,24 @@ def blend_pyramid(a, b, mask, weights):
     def laplace_pyramid(gauss_pyr):
         return [high - upsample(low)
                 for high, low in pairwise(gauss_pyr)]
-    max_layer = max(weights.keys())
-    gauss_pyr_a = list(pyramid_gaussian(a, max_layer))
-    gauss_pyr_b = list(pyramid_gaussian(b, max_layer))
-    gauss_pyr_mask = list(pyramid_gaussian(mask, max_layer))
+    if weights is None:
+        weights = [1] * num_layers
+    num_layers = len(weights)
+    gauss_pyr_a = list(pyramid_gaussian(a, num_layers))
+    gauss_pyr_b = list(pyramid_gaussian(b, num_layers))
+    gauss_pyr_mask = list(pyramid_gaussian(mask, num_layers))
     lap_pyr_a = laplace_pyramid(gauss_pyr_a) + gauss_pyr_a[-1:]
     lap_pyr_b = laplace_pyramid(gauss_pyr_b) + gauss_pyr_b[-1:]
 
     blend_pyr = []
-    for s, weight in weights.items():
-        mask = gauss_pyr_mask[s]
-        blend = lap_pyr_a[s]*mask + lap_pyr_b[s]*(1-mask)
+    for gauss_mask, lap_a, lap_b in zip(gauss_pyr_mask, lap_pyr_a, lap_pyr_b):
+        blend = lap_a*gauss_mask + lap_b*(1-gauss_mask)
         blend_pyr.append(blend)
 
     img = None
-    for low, high in pairwise(reversed(blend_pyr)):
+    for weight, (low, high) in zip([0] + weights,
+                                   pairwise(reversed(blend_pyr))):
         if img is None:
             img = low
-        img = upsample(img) + high
+        img = upsample(img) + weight*high
     return img

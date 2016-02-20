@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from conftest import plt_save_and_maybe_show, imsave
+from conftest import plt_save_and_maybe_show
 from deepdecoder.utils import rotate_by_multiple_of_90, blend_pyramid, \
-    blend_pyramid_new, pyramid_reduce, pyramid_gaussian
+    pyramid_reduce, pyramid_gaussian
 
 
 import keras.backend as K
@@ -80,12 +80,11 @@ def blend_images():
 
 
 def test_util_pyramid_reduce(astronaut):
-    reduced = pyramid_reduce(theano.shared())
+    reduced = pyramid_reduce(theano.shared(astronaut))
     assert reduced.eval().shape[-1] == astronaut.shape[-1] // 2
 
 
 def test_util_pyramid_gaussian(astronaut):
-    print(astronaut.shape)
     max_layer = np.log2(astronaut.shape[-1])
     pyr_gaus = list(pyramid_gaussian(theano.shared(astronaut), max_layer))
     assert len(pyr_gaus) == max_layer
@@ -103,11 +102,11 @@ def blend_pyramid_fn():
     orange = K.placeholder(name='orange', ndim=4)
     apple = K.placeholder(name='apple', ndim=4)
     mask = K.placeholder(name='mask', ndim=4)
-    blended = blend_pyramid(orange, apple, mask,
-                            {i: 1. for i in range(4)})
+    blended = blend_pyramid(orange, apple, mask, num_layers=4)
     return K.function([orange, apple, mask], [blended])
 
 
+@pytest.mark.slow
 def test_util_benchmark_blending_pyramid(blend_images, blend_pyramid_fn):
     bs = 128
     orange, apple, mask = [b.repeat(bs, axis=0) for b in blend_images]
