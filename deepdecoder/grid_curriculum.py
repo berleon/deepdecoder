@@ -239,6 +239,8 @@ class CurriculumCallback(callbacks.Callback):
         self.curriculum = curriculum
         self.lecture_id = 0
         self.losses = []
+    def current_lecture(self):
+        return self.curriculum[self.lecture_id]
 
     def on_train_begin(self, log={}):
         self.lecture_id = 0
@@ -276,17 +278,16 @@ def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
     return np.concatenate([ids, configs], axis=1), grids[0]
 
 
-def grid_generator(curriculum, lecutre_id, batch_size=128, artist=None,
+def grid_generator(curriculum_cb, batch_size=128, artist=None,
                    scale=1.):
     if artist is None:
         artist = MaskGridArtist()
     while True:
-        lecture = curriculum[lecutre_id.value]
+        lecture = curriculum_cb.current_lecture()
         yield grids_from_lecture(lecture, batch_size, artist, scale)
 
 
 def get_generator_and_callback(curriculum, batch_size=128, scale=1.):
-    lecture_id = multiprocessing.Value('i', 0)
-    cb = CurriculumCallback(curriculum, lecture_id)
-    gen = grid_generator(curriculum, lecture_id, batch_size, scale=scale)
+    cb = CurriculumCallback(curriculum)
+    gen = grid_generator(curriculum, batch_size, scale=scale)
     return gen, cb
