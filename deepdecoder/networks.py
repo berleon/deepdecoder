@@ -284,18 +284,20 @@ def gan_with_z_rot90_grid_idx(generator, discriminator,
     return GAN(g_graph, d_graph, z_shape, reconstruct_fn=reconstruct_fn)
 
 
+def add_diff_rot90(g_outmap):
+    g_out = g_outmap["output"]
+    grid_idx = g_outmap['grid_idx']
+    z_rot90 = g_outmap['z_rot90']
+    alphas = binary_mask(grid_idx, black=0.5, ignore=1.0,  white=0.5)
+    bw_mask = binary_mask(grid_idx, black=0., ignore=0,  white=0.5)
+    combined = (alphas * g_out) + bw_mask
+    return rotate_by_multiple_of_90(combined, z_rot90)
+
+
 def gan_add_bw_grid(generator, discriminator, batch_size=128, nb_z=20):
-    def add_diff(g_outmap):
-        g_out = g_outmap["output"]
-        grid_idx = g_outmap['grid_idx']
-        z_rot90 = g_outmap['z_rot90']
-        alphas = binary_mask(grid_idx, black=0.5, ignore=1.0,  white=0.5)
-        bw_mask = binary_mask(grid_idx, black=0., ignore=0,  white=0.5)
-        combined = (alphas * g_out) + bw_mask
-        return rotate_by_multiple_of_90(combined, z_rot90)
     return gan_with_z_rot90_grid_idx(
         generator, discriminator, batch_size=batch_size,
-        nb_z=nb_z, reconstruct_fn=add_diff)
+        nb_z=nb_z, reconstruct_fn=add_diff_rot90)
 
 
 def mogan_learn_bw_grid(generator, discriminator, optimizer_fn,

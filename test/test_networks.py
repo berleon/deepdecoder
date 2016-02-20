@@ -17,13 +17,14 @@ from keras.models import Sequential
 from keras.layers.core import Dense, Flatten, Reshape
 from keras.optimizers import Adam
 from beesgrid import TAG_SIZE
-from deepdecoder.networks import diff_gan, NB_GAN_GRID_PARAMS, \
-    mogan_learn_bw_grid, dcgan_generator, dcgan_discriminator
+from deepdecoder.networks import gan_with_z_rot90_grid_idx, dcgan_generator, \
+    NB_GAN_GRID_PARAMS, mogan_learn_bw_grid, dcgan_discriminator, \
+    add_diff_rot90
 from deepdecoder.data import gen_diff_gan
 import pytest
 
 
-def test_networks_diff_gan():
+def test_networks_gan_with_z_rot90_grid_idx():
     n = TAG_SIZE*TAG_SIZE
     nb_z = 20
     generator = Sequential()
@@ -34,7 +35,8 @@ def test_networks_diff_gan():
     discriminator.add(Flatten(input_shape=(1, TAG_SIZE, TAG_SIZE)))
     discriminator.add(Dense(1, input_dim=n))
 
-    gan = diff_gan(generator, discriminator, nb_z=nb_z)
+    gan = gan_with_z_rot90_grid_idx(generator, discriminator, nb_z=nb_z,
+                                    reconstruct_fn=add_diff_rot90)
     gan.compile(Adam(), Adam())
     batch = next(gen_diff_gan(gan.batch_size * 10))
     gan.fit(batch.grid_bw, {'grid_idx': batch.grid_idx,
