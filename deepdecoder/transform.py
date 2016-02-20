@@ -14,6 +14,7 @@
 
 from beras.util import upsample, resize_interpolate, \
     smooth
+from more_itertools import pairwise
 
 
 def pyramid_expand(image, sigma=2/3):
@@ -43,6 +44,11 @@ def pyramid_gaussian(image, max_layer):
         prev_image = layer_image
 
 
+def pyramid_laplace(gauss_pyr):
+    return [high - upsample(low)
+            for high, low in pairwise(gauss_pyr)]
+
+
 def blend_pyramid(a, b, mask, num_layers=None, weights=None):
     """TODO: Docstring for function.
 
@@ -50,24 +56,14 @@ def blend_pyramid(a, b, mask, num_layers=None, weights=None):
     :returns: TODO
 
     """
-    def pairwise(iterable):
-        prev = None
-        for elem in iterable:
-            if prev is not None:
-                yield prev, elem
-            prev = elem
-
-    def laplace_pyramid(gauss_pyr):
-        return [high - upsample(low)
-                for high, low in pairwise(gauss_pyr)]
     if weights is None:
         weights = [1] * num_layers
     num_layers = len(weights)
     gauss_pyr_a = list(pyramid_gaussian(a, num_layers))
     gauss_pyr_b = list(pyramid_gaussian(b, num_layers))
     gauss_pyr_mask = list(pyramid_gaussian(mask, num_layers))
-    lap_pyr_a = laplace_pyramid(gauss_pyr_a) + gauss_pyr_a[-1:]
-    lap_pyr_b = laplace_pyramid(gauss_pyr_b) + gauss_pyr_b[-1:]
+    lap_pyr_a = pyramid_laplace(gauss_pyr_a) + gauss_pyr_a[-1:]
+    lap_pyr_b = pyramid_laplace(gauss_pyr_b) + gauss_pyr_b[-1:]
 
     blend_pyr = []
     for gauss_mask, lap_a, lap_b in zip(gauss_pyr_mask, lap_pyr_a, lap_pyr_b):
