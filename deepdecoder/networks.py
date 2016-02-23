@@ -332,3 +332,11 @@ def mogan_learn_bw_grid(generator, discriminator, optimizer_fn,
     mogan = MOGAN(gan, grid_loss, optimizer_fn,
                   gan_regulizer=GAN.L2Regularizer())
     return mogan, grid_loss_weight
+
+
+def dummy_dcgan_generator(n=32, input_dim=50, nb_output_channels=1,
+                          include_last_layer=True):
+    model = Sequential()
+    model.add(Dense(64*64, input_dim=input_dim, activation='relu'))
+    model.add(Reshape((1, 64, 64)))
+    return model
