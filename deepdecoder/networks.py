@@ -84,6 +84,7 @@ def get_decoder_model():
 def dcgan_generator(n=32, input_dim=50, nb_output_channels=1, include_last_layer=True):
     model = Sequential()
     model.add(Dense(8*n*4*4, input_dim=input_dim))
+    model.add(Activation('relu'))
     model.add(Reshape((8*n, 4, 4,)))
 
     model.add(Deconvolution2D(4*n, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
