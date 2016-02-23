@@ -24,7 +24,7 @@ import pycuda.gpuarray as gpuarray
 import theano
 import theano.sandbox.cuda as thcu
 import theano.tensor as T
-from beras.util import blur, sobel
+from beras.util import smooth, sobel
 from beesgrid import MASK, MASK_BLACK, MASK_WHITE
 from dotmap import DotMap
 from pycuda.compiler import SourceModule
@@ -290,7 +290,7 @@ def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
     bw = adaptive_mask(grid_idx, ignore=0.0,
                        black=black_mean.dimshuffle(*dimsuffle),
                        white=white_mean.dimshuffle(*dimsuffle))
-    # bw = blur(bw, sigma=2.)
+    # bw = smooth(bw, sigma=2.)
     diff = T.zeros_like(bw)
     idx = T.bitwise_and(T.neq(grid_idx, MASK["IGNORE"]),
                         T.neq(grid_idx, MASK["BACKGROUND_RING"]))
@@ -333,9 +333,9 @@ def mask_loss_sobel(grid_idx, image, impl='auto', diff_type='mse', scale=10.):
         return T.set_subtensor(x[indicies.nonzero()], 0)
 
     bw = binary_mask(grid_idx, ignore=0.5)
-    bw = blur(bw, sigma=2.)
+    bw = smooth(bw, sigma=2.)
     sobel_bw = sobel(bw)
-    sobel_img = [blur(s, sigma=1.) for s in sobel(image)]
+    sobel_img = [smooth(s, sigma=1.) for s in sobel(image)]
     sobel_bw = [norm_by_max(s) for s in sobel_bw]
     sobel_img = [norm_by_max(s) for s in sobel_img]
 
@@ -432,29 +432,88 @@ def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1.,
 
 
 def pyramid_loss(grid_idx, image):
-    indicies = T.bitwise_and(T.neq(grid_idx, MASK["IGNORE"]),
-                             T.neq(grid_idx, MASK["BACKGROUND_RING"]))
+    def loss_pixel_valid_range():
+        num_to_great = T.maximum(T.sum(image > max_pixel_value), 1.)
+        num_to_small = T.maximum(T.sum(image < min_pixel_value), 1.)
+        loss_to_great = \
+            (T.minimum(image, min_pixel_value) - min_pixel_value)**2
+        loss_to_small = \
+            (T.maximum(image, max_pixel_value) - max_pixel_value)**2
+        return (loss_to_great + loss_to_small) / (num_to_great + num_to_small)
 
-    black_mean, white_mean, ignore_mean = segment_means(grid_idx, image)
+    def mean(mask):
+        return T.sum(image*mask, axis=(1, 2, 3)) / T.sum(mask, axis=(1, 2, 3))
 
-    bw = adaptive_mask(grid_idx, ignore=ignore_mean, black=black_mean,
-                       white=white_mean)
-    loss = - T.minimum(white_mean - black_mean, 0)
-    loss += T.exp(-(white_mean - black_mean)**2 / 0.2**2)
+    min_mean_distance = 0.2
+    max_grayness = 0.3
+    max_pixel_value = 1.
+    min_pixel_value = 0
+    # use 16x16 as last resolution
     max_layer = 3
-    gauss_pyr_bw = pyramid_gaussian(bw, max_layer)
-    gauss_pyr_image = pyramid_gaussian(image, max_layer)
-    diff = gauss_pyr_bw[-1] - gauss_pyr_image[-1]
-    loss += (diff[indicies.nonzero()]**2).mean()
-    visual_diff = T.zeros_like(diff)
-    visual_diff = T.set_subtensor(visual_diff[indicies.nonzero()],
-                                  diff[indicies.nonzero()]**2)
+
+    black_mask = binary_mask(grid_idx, ignore=0, black=1, white=0)
+    white_mask = binary_mask(grid_idx, ignore=0, black=0, white=1)
+
+    black_mean = mean(black_mask)
+    white_mean = mean(white_mask)
+
+    mean_diff = white_mean - black_mean
+    gray_mean = (white_mean + black_mean) / 2
+    black_mean = T.where(mean_diff < min_mean_distance,
+                         gray_mean - min_mean_distance/2,
+                         black_mean)
+    white_mean = T.where(mean_diff < min_mean_distance,
+                         gray_mean + min_mean_distance/2,
+                         white_mean)
+
+    dimshuffle = (0, 'x', 'x', 'x')
+    white_mean = white_mean.dimshuffle(*dimshuffle)
+    black_mean = black_mean.dimshuffle(*dimshuffle)
+
+    mean_half_dist = (white_mean - black_mean) / 2
+
+    gauss_pyr_black = list(pyramid_gaussian(black_mask, max_layer))
+    gauss_pyr_white = list(pyramid_gaussian(white_mask, max_layer))
+    gauss_pyr_image = list(pyramid_gaussian(image, max_layer))
+
+    white_diff = white_mean*gauss_pyr_white[-1] - \
+        gauss_pyr_image[-1]*gauss_pyr_white[-1]
+    black_diff = gauss_pyr_image[-1]*gauss_pyr_black[-1] - \
+        black_mean*gauss_pyr_black[-1]
+
+    white_diff_thres = T.maximum(white_diff - max_grayness*(mean_half_dist), 0)
+    black_diff_thres = T.maximum(black_diff - max_grayness*(mean_half_dist), 0)
+
+    loss_white = white_diff_thres.sum(axis=(1, 2, 3)) / \
+        gauss_pyr_white[-1].sum(axis=(1, 2, 3))
+    loss_black = black_diff_thres.sum(axis=(1, 2, 3)) / \
+        gauss_pyr_black[-1].sum(axis=(1, 2, 3))
+    loss = (loss_white + loss_black).mean()
+    loss += loss_pixel_valid_range()
     return DotMap({
         'loss': loss,
         'visual': {
-            'diff': visual_diff,
-            'bw_grid': bw,
-            'gauss_pyr_bw': gauss_pyr_bw,
-            'gauss_pyr_image': gauss_pyr_image
+            'gauss_pyr_image': gauss_pyr_image[-1],
+            'gauss_pyr_black': gauss_pyr_black[-1],
+            'black_diff': black_diff,
+            'black_diff_thres': black_diff_thres,
+            'gauss_pyr_white': gauss_pyr_white[-1],
+            'white_diff': white_diff,
+            'white_diff_thres': white_diff_thres,
+        },
+        'print': {
+            '0 black_mean': black_mean,
+            '1 mean_half_dist': mean_half_dist,
+            '2 white_mean': white_mean,
+            '3 loss_black': loss_black,
+            '4 loss_white': loss_white,
+            '5 loss': loss_black + loss_white,
         }
     })
+
+
+def to_keras_loss(loss_fn):
+    def wrapper(y_pred, y_true):
+        return loss_fn(y_pred, y_true).loss
+
+    return wrapper
