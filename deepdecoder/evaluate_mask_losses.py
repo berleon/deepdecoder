@@ -15,46 +15,71 @@
 import math
 import theano
 import theano.tensor as T
-from beesgrid import gt_grids, draw_grids, MaskGridArtist
+from beesgrid import gt_grids, draw_grids, MaskGridArtist, NUM_MIDDLE_CELLS, \
+    CONFIG_CENTER, CONFIG_ROTS
 
+import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from deepdecoder import TAG_SIZE
-
-from deepdecoder.utils import np_binary_mask, zip_visualise_tiles
+from beesgrid import TAG_SIZE
+from deepdecoder.utils import np_binary_mask
 
 
-def evaluate_loss(gt_files, name, loss_fn, visualise=True, *args, **kwargs):
+def evaluate_loss(gt_files, name, loss_fn, loss_dict, visualise=True,
+                  bit_flips=0, translation=0, z_rotation=0):
+    def outs_to_dict(outs, loss_dict):
+        num_visual = len(loss_dict.visual)
+        num_shape = len(loss_dict.shape)
+        visual_dict = dict(zip(loss_dict.visual.keys(), outs[:num_visual]))
+        shape_dict = dict(zip(loss_dict.shape.keys(),
+                              outs[num_visual:num_visual+num_shape]))
+        print_dict = dict(zip(loss_dict.print.keys(),
+                              outs[num_visual+num_shape:]))
+        return visual_dict, shape_dict, print_dict
+
+    def alter_params(ids, configs):
+        bs = len(configs)
+        new_ids = []
+        for id in ids:
+            flipped_bits = np.random.choice(
+                NUM_MIDDLE_CELLS, bit_flips, replace=False)
+            id[flipped_bits] += 1
+            id[id == 2] = 0
+            new_ids.append(id)
+        angle = np.random.uniform(-np.pi, np.pi, (bs, 1))
+        configs[:, CONFIG_CENTER] += translation * \
+            np.concatenate((np.cos(angle), np.sin(angle)), axis=1)
+        configs[:, CONFIG_ROTS[0]] += z_rotation
+        return np.stack(new_ids), configs
+
     nb_views = 16
     if type(visualise) == int:
         nb_views = visualise
         visualise = True
 
-    print("Evaluating {} with args {} and kwargs {}:".format(name, args,
-                                                             kwargs))
-    calc_loss, loss_dict = compile_loss_fn(loss_fn, visualise, *args, **kwargs)
-    batch_size = 16
+    batch_size = 8
     loss = 0
-    total_grids = 0
+    num_batches = 0
     for gt, ids, configs in gt_grids(gt_files, batch_size):
+        configs[:, CONFIG_CENTER] = 0
+        ids, configs = alter_params(ids, configs)
         masks, = draw_grids(ids, configs, artist=MaskGridArtist())
-        outs = calc_loss(masks, gt) * len(gt)
-
+        outs = loss_fn(masks, gt)
+        visual_dict, shape_dict, print_dict = outs_to_dict(outs[1:], loss_dict)
         if visualise:
             out_dict = {"1-masks": np_binary_mask(masks), "0-img": gt}
-            for l, o in zip(loss_dict.visual, outs[1:]):
-                out_dict[l] = o
-            visualise_loss(out_dict, nb_views)
+            visual_dict.update(out_dict)
+            visualise_loss(visual_dict, shape_dict, print_dict, nb_views)
             visualise = False
         l = outs[0]
         loss += l
-        total_grids += len(gt)
-
-    loss /= total_grids
-    print("Total mean loss is: {}".format(loss))
+        num_batches += 1
 
 
-def visualise_loss(out_dict, nb_views=16):
+    loss /= num_batches
+    return loss
+
+
+def visualise_loss(out_dict, shape_dict, print_dict, nb_views=16):
     bs = None
     size = len(out_dict)
     cols = min(size, 4)
@@ -71,18 +96,22 @@ def visualise_loss(out_dict, nb_views=16):
             plt.imshow(out[i, 0], cmap='gray')
             plt.colorbar(fraction=0.046, pad=0.04)
             plt.title(name)
+
+        for (name, out) in sorted(shape_dict.items()):
+            print("{}: {}".format(name, out.shape))
+
+        for (name, out) in sorted(print_dict.items()):
+            print("{}: {}".format(name, out[i]))
         plt.show()
 
 
 def benchmark_loss_fn(loss_fn, *args, **kwargs):
     batch_size = 128
-    mask = theano.shared(np.random.sample((batch_size, 1, TAG_SIZE,
-                                             TAG_SIZE)))
+    mask = theano.shared(np.random.sample(
+        (batch_size, 1, TAG_SIZE, TAG_SIZE)))
     predicted = T.tensor4()
     loss_dict = loss_fn(mask, predicted, *args, **kwargs)
     outs = [loss_dict.loss]
-    if visualise:
-        outs.extend(loss_dict.visual.values())
     return theano.function([mask, predicted], outs), loss_dict
 
 
@@ -93,5 +122,6 @@ def compile_loss_fn(loss_fn, visualise=True, *args, **kwargs):
     outs = [loss_dict.loss]
     if visualise:
         outs.extend(loss_dict.visual.values())
+        outs.extend(loss_dict.shape.values())
+        outs.extend(loss_dict.print.values())
     return theano.function([mask, predicted], outs), loss_dict
-
