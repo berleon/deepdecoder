@@ -21,15 +21,25 @@ from keras import optimizers
 
 
 class MultipleObjectives(AbstractModel):
-    def __init__(self, name, inputs, outputs_map, params,
+    def __init__(self, name, inputs, params,
                  objectives,
+                 metrics=None,
                  constraints=None,
                  additional_updates=None,
                  debug_map=None,
                  output_loss=True):
+        """
+        :param name: name of the objective
+        :param inputs: list of input variables
+        :param objectives: {name: variable} objectives to optimize
+        :param metrics: {label: variable} print this values during training
+        :param params: list of all weights that will be optimized
+        """
         self.name = name
         self.inputs = inputs
-        self.outputs_map = outputs_map
+        if metrics is None:
+            metrics = {}
+        self.metrics = metrics
         self.objectives = objectives
         self.params = params
         if constraints is None:
@@ -47,17 +57,17 @@ class MultipleObjectives(AbstractModel):
 
     @staticmethod
     def sum_objectives(objectives):
-        return sum([o.mean() for o in objectives])
+        return sum([o.mean() for o in objectives.values()])
 
     def compile(self, optimizer_lambda):
         scalar_objective = self.sum_objectives(self.objectives)
         if self.output_loss:
-            self.outputs_map[self.name] = scalar_objective
+            self.metrics[self.name] = scalar_objective
         optimizer = optimizers.get(optimizer_lambda())
         updates = optimizer.get_updates(self.params, self.constraints,
                                         scalar_objective)
         self._train_fn = K.function(
-                self.inputs, list(self.outputs_map.values()),
+                self.inputs, list(self.metrics.values()),
                 updates=updates + self.additional_updates)
         if self.debug_map:
             self._debug_fn = K.function(
@@ -102,12 +112,12 @@ class MultipleObjectives(AbstractModel):
 
             if type(outs) != list:
                 outs = [outs]
-            for key, value in zip(self.outputs_map.keys(), outs):
+            for key, value in zip(self.metrics.keys(), outs):
                 batch_logs[key] = float(value)
 
         self._fit(train, nb_samples, batch_size=batch_size, nb_epoch=nb_epoch,
                   verbose=verbose, callbacks=callbacks, shuffle=shuffles,
-                  metrics=self.outputs_map.keys())
+                  metrics=self.metrics.keys())
 
     def debug(self, inputs):
         outs = self._debug_fn(*inputs)

@@ -36,18 +36,18 @@ class MOGAN:
         self.build_dict = v
         self.gan = gan
         self.optimizer_fn = optimizer_fn
-        outputs_map = {
+        metrics = {
             "cond_loss": cond_loss.mean(),
             "d_loss": v.d_loss,
             "g_loss": v.g_loss,
         }
         if type(gan_regulizer) == GAN.L2Regularizer:
-            outputs_map["l2"] = gan_regulizer.l2_coef
+            metrics["l2"] = gan_regulizer.l2_coef
         self.mulit_objectives = MultipleObjectives(
                 name, inputs,
-                outputs_map=outputs_map,
+                metrics=metrics,
                 params=gan.G.params,
-                objectives=[v.g_loss, cond_loss],
+                objectives={'g_loss': v.g_loss, 'cond_loss': cond_loss},
                 additional_updates=v.d_updates + v.reg_updates)
 
     def compile(self):
