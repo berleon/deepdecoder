@@ -43,11 +43,12 @@ def test_util_pyramid_reduce(astronaut):
 
 def test_util_pyramid_gaussian(astronaut):
     max_layer = np.log2(astronaut.shape[-1])
-    pyr_gaus = list(pyramid_gaussian(theano.shared(astronaut), max_layer))
+    astronauts = theano.shared(np.repeat(astronaut, 64, axis=0))
+    pyr_gaus = list(pyramid_gaussian(astronauts, max_layer))
     assert len(pyr_gaus) == max_layer
     gauss_fn = theano.function([], pyr_gaus)
     for i, gaus in enumerate(gauss_fn()):
-        plt.imshow(gaus[0, 0], cmap='gray')
+        plt.imshow(gaus[3, 0], cmap='gray')
         plt_save_and_maybe_show("utils/gaussian/gauss_{}.png".format(i))
 
     assert pyr_gaus[-1].shape.eval()[-1] == \
