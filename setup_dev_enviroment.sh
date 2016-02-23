@@ -1,7 +1,8 @@
 #! /usr/bin/env bash
 
 REPOS=".."
-PIP_ARGS=" --user "
+PIP_ARGS=""
+SUDO="sudo "
 
 set -e
 
@@ -25,9 +26,10 @@ DEEPDECODER=$(realpath "$REPOS/deepdecoder")
 PYBEESGRID=$(realpath "$REPOS/pybeesgrid")
 BERAS=$(realpath "$REPOS/beras")
 
+$SUDO pip install git+https://github.com/EderSantana/seya.git@8567d2715706b94d72da4d6a3864aae094be3951#egg=seya $PIP_ARGS
 
 cd $BERAS
-pip install -e . $PIP_ARGS
+$SUDO pip install -e . $PIP_ARGS
 
 cd $PYBEESGRID
 mkdir -p build
@@ -35,8 +37,8 @@ cd build
 cmake .. && make -j `nproc`
 make create_python_pkg
 cd $PYBEESGRID/build/python/package
+$SUDO pip install --upgrade --no-deps . $PIP_ARGS
 
-pip install --upgrade --no-deps . $PIP_ARGS
 cd $DEEPDECODER
-pip install -e . $PIP_ARGS
+$SUDO pip install -e . $PIP_ARGS
 
