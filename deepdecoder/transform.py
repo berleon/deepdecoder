@@ -33,13 +33,13 @@ def pyramid_reduce(image, sigma=2/3):
     return resize_interpolate(smooth(image, sigma), scale=2)
 
 
-def pyramid_gaussian(image, max_layer):
+def pyramid_gaussian(image, max_layer, sigma=2/3):
     yield image
     layer = 1
     prev_image = image
     while layer != max_layer:
         layer += 1
-        layer_image = pyramid_reduce(prev_image)
+        layer_image = pyramid_reduce(prev_image, sigma)
         yield layer_image
         prev_image = layer_image
 
