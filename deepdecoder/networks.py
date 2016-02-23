@@ -28,6 +28,7 @@ from deepdecoder.deconv import Deconvolution2D
 from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
 from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
 from deepdecoder.mogan import MOGAN
+from deepdecoder.data import num_normalized_params
 import theano
 import theano.tensor as T
 import numpy as np
@@ -262,12 +263,11 @@ def dcgan_variational_add_generator(nb_z=40, n=16):
     g.add_output('output', inputs=[m_out, v_out], concat_axis=1)
     return g
 
-NB_GAN_GRID_PARAMS = NUM_CONFIGS + NUM_MIDDLE_CELLS + len(CONFIG_ROTS)
 
 
 def gan_with_z_rot90_grid_idx(generator, discriminator,
                               batch_size=128, nb_z=20, reconstruct_fn=None):
-    nb_grid_params = NB_GAN_GRID_PARAMS
+    nb_grid_params = num_normalized_params()
     z_shape = (batch_size, nb_z)
     grid_shape = (1, TAG_SIZE, TAG_SIZE)
     grid_params_shape = (nb_grid_params, )

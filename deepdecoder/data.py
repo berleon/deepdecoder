@@ -24,7 +24,8 @@ import itertools
 import h5py
 
 from deepdecoder.utils import np_binary_mask
-from deepdecoder.grid_curriculum import exam, Uniform, grids_from_lecture
+from deepdecoder.grid_curriculum import exam, Uniform, grids_from_lecture, \
+    DISTRIBUTION_PARAMS
 from beras.data_utils import HDF5Tensor
 from dotmap import DotMap
 floatX = theano.config.floatX
@@ -60,41 +61,39 @@ def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
 
 
 def normalize_grid_params(grid_params):
+    p = DISTRIBUTION_PARAMS
+    bits = grid_params[:, :NUM_MIDDLE_CELLS]
+    # map bits to (-1, 1)
+    bits = 2*(bits + 1) - 3
+
     configs = grid_params[:, NUM_MIDDLE_CELLS:]
     angles = configs[:, CONFIG_ROTS]
-    sin = np.sin(angles)
-    cos = np.cos(angles)
-    r = configs[:, (CONFIG_RADIUS,)] / 25. - 1
-    xy = configs[:, CONFIG_CENTER] / (TAG_SIZE/2) - 1
+    rot_z = angles[:, :1]
+    sin_z = np.sin(rot_z)
+    cos_z = np.cos(rot_z)
+    rot_y = angles[:, 1:2] / p.y.std
+    rot_x = angles[:, 2:] / p.x.std
+    r = (configs[:, (CONFIG_RADIUS,)] - p.radius.mean) / p.radius.std
+    xy = (configs[:, CONFIG_CENTER] - p.center.mean) / p.center.std
     return np.concatenate(
-        [grid_params[:, :NUM_MIDDLE_CELLS], sin, cos, xy, r], axis=1)
+        [bits, sin_z, cos_z, rot_y, rot_x,  xy, r], axis=1)
 
 
-gen_diff_all_outputs = ('grid_idx', 'grid_diff', 'grid_bw')
+def num_normalized_params():
+    return len(next(grids_lecture_generator(batch_size=1)))
 
 
-def gen_diff_gan(batch_size=128, outputs=gen_diff_all_outputs):
-    def grid_exam_generator():
-        def lecture():
-            lec = exam()
-            lec.z = Uniform(pi/4, -pi/4)
-            return lec
-        while True:
-            yield grids_from_lecture(lecture(), batch_size)
+def normalize_generator(generator):
+    for grid_params, grid_idx in generator:
+        yield normalize_grid_params(grid_params), grid_idx
 
-    for grid_params, grid_idx in grid_exam_generator():
-        z_bins = np.random.choice(4, batch_size)
-        batch = DotMap({
-            'z_bins': z_bins[:, np.newaxis],
-            'params': normalize_grid_params(grid_params),
-        })
-        if 'grid_idx' in outputs:
-            batch.grid_idx = grid_idx
-        if 'grid_diff' in outputs:
-            batch.grid_diff = np_binary_mask(grid_idx, ignore=0., white=0.5)
-        if 'grid_bw' in outputs:
-            batch.grid_bw = np_binary_mask(grid_idx)
-        yield batch
+
+def grids_lecture_generator(batch_size=128, lecture=None):
+    if lecture is None:
+        lecture = exam()
+    while True:
+        params, grid_idx = grids_from_lecture(lecture, batch_size)
+        yield normalize_grid_params(params), grid_idx
 
 
 def load_real_hdf5_tags(fname, batch_size, batches_per_epochs):
