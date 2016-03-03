@@ -85,7 +85,7 @@ class Convolution2D(Layer):
         self.W_shape = (self.nb_filter, stack_size, self.nb_row, self.nb_col)
         self.W = self.init(self.W_shape)
         self.b = shared_zeros((self.nb_filter,))
-        self.params = [self.W, self.b]
+        self.trainable_weights = [self.W, self.b]
         self.regularizers = []
 
         if self.W_regularizer:
