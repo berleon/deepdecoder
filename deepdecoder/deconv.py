@@ -18,6 +18,7 @@ from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI, \
     gpu_alloc_empty
 from theano.sandbox.cuda.basic_ops import host_from_gpu
 from keras.layers.core import Layer
+import keras.backend as K
 
 
 class Deconvolution2D(Layer):
@@ -35,8 +36,11 @@ class Deconvolution2D(Layer):
     def build(self):
         stack_size = self.input_shape[1]
         self.W_shape = (stack_size, self.nb_filter, self.nb_row, self.nb_col)
-        self.W = self.init(self.W_shape)
-        self.params = [self.W]
+        W_init_shape = (stack_size, self.nb_row*self.nb_col*self.nb_filter)
+        w = self.init(W_init_shape)
+        self.W = K.variable(K.get_value(w).reshape(self.W_shape))
+        self.b = K.zeros((self.nb_filter,))
+        self.trainable_weights = [self.W, self.b]
 
     @property
     def output_shape(self):
@@ -58,4 +62,15 @@ class Deconvolution2D(Layer):
             border_mode=self.border_mode, subsample=self.subsample,
             conv_mode='conv')(out.shape, kerns.shape)
         d_img = GpuDnnConvGradI()(kerns, img, out, desc)
-        return host_from_gpu(d_img)
+        return d_img + K.reshape(self.b, (1, self.nb_filter, 1, 1))
+
+    def get_config(self):
+        config = {'name': self.__class__.__name__,
+                  'nb_filter': self.nb_filter,
+                  'nb_row': self.nb_row,
+                  'nb_col': self.nb_col,
+                  'init': self.init.__name__,
+                  'border_mode': self.border_mode,
+                  'subsample': self.subsample}
+        base_config = super().get_config()
+        return dict(list(base_config.items()) + list(config.items()))
