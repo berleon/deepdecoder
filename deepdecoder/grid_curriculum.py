@@ -31,7 +31,7 @@ DISTRIBUTION_PARAMS = DotMap({
     'z': {'low': -pi, 'high': pi},
     'y': {'mean': 0, 'std': to_radians(12)},
     'x': {'mean': 0, 'std': to_radians(10)},
-    'center': {'mean': TAG_SIZE/2, 'std': 2},
+    'center': {'mean': 0, 'std': 2},
     'radius': {'mean': 24.5, 'std': 1},
 })
 
@@ -118,8 +118,10 @@ class Lecture:
         self.x = Default(Zeros())
         self.y = Default(Zeros())
         self.ids = Default(Bernoulli())
-        self.center = Default(Normal(25, 2))
-        self.radius = Default(Normal(24.5, 1))
+        self.center = Default(Normal(DISTRIBUTION_PARAMS.center.mean,
+                                     DISTRIBUTION_PARAMS.center.std))
+        self.radius = Default(Normal(DISTRIBUTION_PARAMS.radius.mean,
+                                     DISTRIBUTION_PARAMS.radius.std))
         self.pass_limit = pass_limit
         self.name = name
 
