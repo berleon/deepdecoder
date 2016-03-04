@@ -432,22 +432,11 @@ def mask_loss(mask_image, image, impl='auto', scale=50, mean_weight=1.,
 
 
 def pyramid_loss(grid_idx, image):
-    def loss_pixel_valid_range():
-        num_to_great = T.maximum(T.sum(image > max_pixel_value), 1.)
-        num_to_small = T.maximum(T.sum(image < min_pixel_value), 1.)
-        loss_to_great = \
-            (T.minimum(image, min_pixel_value) - min_pixel_value)**2
-        loss_to_small = \
-            (T.maximum(image, max_pixel_value) - max_pixel_value)**2
-        return (loss_to_great + loss_to_small) / (num_to_great + num_to_small)
-
     def mean(mask):
         return T.sum(image*mask, axis=(1, 2, 3)) / T.sum(mask, axis=(1, 2, 3))
 
     min_mean_distance = 0.2
     max_grayness = 0.3
-    max_pixel_value = 1.
-    min_pixel_value = 0
     # use 16x16 as last resolution
     max_layer = 3
 
@@ -489,7 +478,6 @@ def pyramid_loss(grid_idx, image):
     loss_black = black_diff_thres.sum(axis=(1, 2, 3)) / \
         gauss_pyr_black[-1].sum(axis=(1, 2, 3))
     loss = (loss_white + loss_black).mean()
-    loss += loss_pixel_valid_range()
     return DotMap({
         'loss': loss,
         'visual': {
