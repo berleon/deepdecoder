@@ -90,6 +90,22 @@ class Uniform(Distribution):
         return super().__eq__(other) and \
             self.low == other.low and self.high == other.high
 
+class DiscretePoints(Distribution):
+    def __init__(self, low, high, nb_points, sigma):
+        self.low = low
+        self.high = high
+        self.nb_points = nb_points
+        self.sigma = sigma
+
+    def sample(self, shape):
+        around = np.linspace(self.low, self.high, num=self.nb_points)
+        return np.random.choice(around, size=shape) + \
+            np.random.normal(0, self.sigma)
+
+    def __eq__(self, other):
+        return super().__eq__(other) and \
+            self.low == other.low and self.high == other.high and \
+            self.nb_points == other.nb_points and self.sigma == other.sigma
 
 class ZDistribution(Distribution):
     def __init__(self, hardness):
@@ -173,6 +189,13 @@ def z_rot_lecture(hardness, lecture=None):
     lecture.z = Uniform(-hardness*pi, hardness*pi)
     return lecture
 
+def z_rot_lecture_discrete(nb_points, sigma=1/360, lecture=None):
+    if lecture is None:
+        lecture = Lecture()
+    lecture.name = 'z: {}'.format(nb_points)
+    nb_points = max(1, nb_points)
+    lecture.z = DiscretePoints(-pi, pi, nb_points, sigma)
+    return lecture
 
 def y_rot_lecture(hardness, lecture=None):
     if lecture is None:
@@ -289,7 +312,7 @@ def grid_generator(curriculum_cb, batch_size=128, artist=None,
         yield grids_from_lecture(lecture, batch_size, artist, scale)
 
 
-def get_generator_and_callback(curriculum, batch_size=128, scale=1.):
+def get_generator_and_callback(curriculum, batch_size=128, artist=None, scale=1.):
     cb = CurriculumCallback(curriculum)
-    gen = grid_generator(curriculum, batch_size, scale=scale)
+    gen = grid_generator(cb, batch_size, artist, scale=scale)
     return gen, cb
