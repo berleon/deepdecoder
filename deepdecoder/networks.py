@@ -14,13 +14,14 @@
 
 
 from keras.models import Sequential, Graph
+from keras.objectives import mse, binary_crossentropy
 from keras.objectives import mse
 from keras.layers.core import Dense, Dropout, Flatten, Reshape, Activation, \
     Layer
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.normalization import BatchNormalization
-from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE, NUM_CONFIGS, CONFIG_ROTS
+from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE
 from beras.layers.attention import RotationTransformer
 from beras.gan import GAN
 from beras.models import asgraph
@@ -30,7 +31,6 @@ from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
 from deepdecoder.mogan import MOGAN
 from deepdecoder.data import num_normalized_params
 import theano
-import theano.tensor as T
 import numpy as np
 import copy
 
@@ -82,54 +82,80 @@ def get_decoder_model():
     return model
 
 
-def dcgan_generator(n=32, input_dim=50, nb_output_channels=1, include_last_layer=True):
+def batch_norm():
+    mode = 0
+    bn = BatchNormalization(mode, axis=1)
+    bn.init = keras.initializations.one
+    return bn
+
+
+def normal(scale=0.02):
+    def normal_wrapper(shape, name=None):
+        return keras.initializations.normal(shape, scale, name)
+    return normal_wrapper
+
+
+def dcgan_generator(n=32, input_dim=50, nb_output_channels=1,
+                    include_last_layer=True, init=normal(0.02)):
+
+    def deconv(nb_filter, h, w):
+        return Deconvolution2D(nb_filter, h, w, subsample=(2, 2),
+                               border_mode=(2, 2), init=init)
     model = Sequential()
-    model.add(Dense(8*n*4*4, input_dim=input_dim))
+    model.add(Dense(8*n*4*4, input_dim=input_dim, init=init))
+    model.add(batch_norm())
     model.add(Activation('relu'))
     model.add(Reshape((8*n, 4, 4,)))
 
-    model.add(Deconvolution2D(4*n, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
-    model.add(BatchNormalization())
+    model.add(deconv(4*n, 5, 5))
+    model.add(batch_norm())
     model.add(Activation('relu'))
 
-    model.add(Deconvolution2D(2*n, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
-    model.add(BatchNormalization())
+    model.add(deconv(2*n, 5, 5))
+    model.add(batch_norm())
     model.add(Activation('relu'))
 
-    model.add(Deconvolution2D(n, 5, 5, subsample=(2, 2), border_mode=(2, 2)))
-    model.add(BatchNormalization())
+    model.add(deconv(n, 5, 5))
+    model.add(batch_norm())
     model.add(Activation('relu'))
 
     if include_last_layer:
         model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
-                                  border_mode=(2, 2)))
+                                  border_mode=(2, 2), init=init))
+        # model.add(BatchNormalization())
         model.add(Activation('linear'))
     return model
 
 
-def dcgan_discriminator(n=32):
+def dcgan_discriminator(n=32, image_views=1, extra_dense_layer=False,
+                        out_activation='sigmoid'):
     model = Sequential()
     model.add(TheanoConvolution2D(n, 5, 5, subsample=(2, 2),
-                                  border_mode='full', input_shape=(1, 64, 64)))
+                                  border_mode='full',
+                                  input_shape=(1, 64, 64*image_views)))
     model.add(LeakyReLU(0.2))
 
     model.add(TheanoConvolution2D(2*n, 5, 5, subsample=(2, 2),
                                   border_mode='full'))
-    model.add(BatchNormalization())
+    model.add(batch_norm())
     model.add(LeakyReLU(0.2))
 
     model.add(TheanoConvolution2D(4*n, 5, 5, subsample=(2, 2),
                                   border_mode='full'))
-    model.add(BatchNormalization())
+    model.add(batch_norm())
     model.add(LeakyReLU(0.2))
 
     model.add(TheanoConvolution2D(8*n, 5, 5, subsample=(2, 2),
                                   border_mode='full'))
-    model.add(BatchNormalization())
+    model.add(batch_norm())
     model.add(LeakyReLU(0.2))
 
     model.add(Flatten())
-    model.add(Dense(1, activation='sigmoid'))
+    if extra_dense_layer:
+        model.add(Dense(4*n))
+        model.add(LeakyReLU(0.2))
+
+    model.add(Dense(1, activation=out_activation))
     return model
 
 
