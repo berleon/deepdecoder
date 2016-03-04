@@ -14,6 +14,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from deepdecoder.visualise import plt_hist
 
 
 def add_uniform_noise(model, std):
@@ -42,7 +43,5 @@ def plot_weights_histogram(model, bins=50):
     hists = weights_histogram(model, bins)
     for name, hist, bin_edges in hists:
         plt.title(name)
-        print(bin_edges[1:].shape)
-        print(hist.shape)
-        plt.plot(bin_edges[1:], hist)
+        plt_hist()
         plt.show()
