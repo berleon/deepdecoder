@@ -23,11 +23,11 @@ import theano
 import itertools
 import h5py
 
-from deepdecoder.utils import np_binary_mask
-from deepdecoder.grid_curriculum import exam, Uniform, grids_from_lecture, \
+from deepdecoder.grid_curriculum import exam, grids_from_lecture, \
     DISTRIBUTION_PARAMS
 from beras.data_utils import HDF5Tensor
-from dotmap import DotMap
+from itertools import count
+
 floatX = theano.config.floatX
 
 
@@ -96,11 +96,35 @@ def grids_lecture_generator(batch_size=128, lecture=None):
         yield normalize_grid_params(params), grid_idx
 
 
-def load_real_hdf5_tags(fname, batch_size, batches_per_epochs):
+def load_real_hdf5_tags(fname, batch_size):
     h5 = h5py.File(fname, 'r')
-    epoch_size = batches_per_epochs*batch_size
     nb_tags = h5['tags'].shape[0]
-    nb_tags = (nb_tags // epoch_size)*epoch_size
+    nb_tags = (nb_tags // batch_size)*batch_size
     tags = HDF5Tensor(fname, 'tags', 0, nb_tags)
-    assert len(tags) % epoch_size == 0
+    assert len(tags) % batch_size == 0
     return tags
+
+
+def real_generator(hdf5_fname, nb_real, use_mean_image=False):
+    tags = load_real_hdf5_tags(hdf5_fname, nb_real)
+    nb_tags = len(tags)
+    print("Got {} real tags".format(nb_tags))
+    mean_end = min(nb_tags, 2000)
+    mean_image = (tags[0:mean_end] / 255).mean(axis=0)
+
+    for i in count(step=nb_real):
+        ti = i % nb_tags
+        tag_batch = tags[ti:ti+nb_real] / 255
+        if use_mean_image:
+            tag_batch -= mean_image
+        yield tag_batch
+
+
+def z_generator(z_shape):
+    while True:
+        yield np.random.uniform(-1, 1, z_shape)
+
+
+def zip_real_z(real_gen, z_gen):
+    for real, z in zip(real_gen, z_gen):
+        yield {'real': real, 'z': z}
