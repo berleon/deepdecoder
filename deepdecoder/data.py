@@ -79,8 +79,9 @@ def normalize_grid_params(grid_params):
         [bits, sin_z, cos_z, rot_y, rot_x,  xy, r], axis=1)
 
 
-def num_normalized_params():
-    return len(next(grids_lecture_generator(batch_size=1)))
+def nb_normalized_params():
+    params, _ = next(grids_lecture_generator(batch_size=1))
+    return params.shape[-1]
 
 
 def normalize_generator(generator):
@@ -94,6 +95,15 @@ def grids_lecture_generator(batch_size=128, lecture=None):
     while True:
         params, grid_idx = grids_from_lecture(lecture, batch_size)
         yield normalize_grid_params(params), grid_idx
+
+
+def mean_generator(batch_size=128):
+    while True:
+        black = np.random.uniform(0, 0.5, (batch_size, 1))
+        white = np.random.uniform(0, 1., (batch_size, 1))
+        white *= 1 - (black + 0.2)
+        white += black + 0.2
+        yield np.concatenate([black, white], axis=1)
 
 
 def load_real_hdf5_tags(fname, batch_size):
