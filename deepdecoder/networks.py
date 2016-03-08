@@ -327,6 +327,24 @@ def gan_add_bw_grid(generator, discriminator, batch_size=128, nb_z=20):
         nb_z=nb_z, reconstruct_fn=add_diff_rot90)
 
 
+def dcgan_pyramid_generator(nb_dcgan_units=64, z_dim=50, nb_fake=64):
+    nb_grid_params = nb_normalized_params()
+    g_input_dim = nb_grid_params + z_dim
+    g = Graph()
+    g.add_input(GAN.z_name, batch_input_shape=(nb_fake, z_dim))
+    g.add_input("gen_grid_params",
+                batch_input_shape=(nb_fake, nb_grid_params))
+    g.add_input("gen_grid_idx", batch_input_shape=(nb_fake, 1, 64, 64))
+    tag_mean = Dense(2, activation='relu', init=normal(0.005))
+    g.add_node(tag_mean, "tag_mean", inputs=[GAN.z_name, "gen_grid_params"])
+    g.add_node(dcgan_generator(nb_dcgan_units, input_dim=g_input_dim),
+               "dcgan_generator",
+               inputs=[GAN.z_name, "gen_grid_params"])
+    g.add_node(PyramidBlending(tag_mean), GAN.generator_name,
+               inputs=["dcgan_generator", "gen_grid_idx"], concat_axis=1)
+    return g
+
+
 def mogan_learn_bw_grid(generator, discriminator, optimizer_fn,
                         batch_size=128, nb_z=20):
     variation_weight = 0.3
