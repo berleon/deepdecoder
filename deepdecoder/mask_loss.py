@@ -31,7 +31,7 @@ from pycuda.compiler import SourceModule
 import theano.misc.pycuda_init
 from deepdecoder.utils import binary_mask, adaptive_mask
 from deepdecoder.transform import pyramid_gaussian
-
+import keras.objectives
 _has_cuda = True
 try:
     from theano.misc.pycuda_utils import to_gpuarray, to_cudandarray
@@ -496,6 +496,42 @@ def pyramid_loss(grid_idx, image):
             '3 loss_black': loss_black,
             '4 loss_white': loss_white,
             '5 loss': loss_black + loss_white,
+        }
+    })
+
+
+def pyramid_mse_loss(grid_idx, image, mean_layer):
+    mean = mean_layer.get_output(train=True)
+    black_mean = mean[:, 0]
+    white_mean = mean[:, 1]
+    dimshuffle = (0, 'x', 'x', 'x')
+    white_mean = white_mean.dimshuffle(*dimshuffle)
+    black_mean = black_mean.dimshuffle(*dimshuffle)
+
+    tag = adaptive_mask(grid_idx, black=black_mean, ignore=0.,
+                        white=white_mean)
+    selection = binary_mask(grid_idx, black=1., ignore=0.5, white=1.)
+
+    max_layer = 2
+    gauss_pyr_tag = list(pyramid_gaussian(tag, max_layer))
+    gauss_pyr_selection = list(pyramid_gaussian(selection, max_layer))
+
+    diff = gauss_pyr_selection[-1]*image[:, :1] - gauss_pyr_tag[-1]
+
+    selection_sum = T.sum(gauss_pyr_selection[-1], axis=(1, 2, 3))
+    squard_error = (diff**2).sum(axis=(1, 2, 3))
+    loss = squard_error / selection_sum.dimshuffle(*dimshuffle)
+    loss += ((image[:, 1:2] - gauss_pyr_selection[-1])**2).mean(axis=(1, 2, 3))
+
+    return DotMap({
+        'loss': loss,
+        'visual': {
+            'gauss_pyr_tag': gauss_pyr_tag[-1],
+            'gauss_pyr_selection': gauss_pyr_selection[-1],
+            'diff': diff,
+        },
+        'print': {
+            '0 loss': loss,
         }
     })
 
