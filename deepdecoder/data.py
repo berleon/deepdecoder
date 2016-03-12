@@ -24,7 +24,8 @@ import itertools
 import h5py
 
 from deepdecoder.grid_curriculum import exam, grids_from_lecture, \
-    DISTRIBUTION_PARAMS
+    DISTRIBUTION_PARAMS, normalize
+from deepdecoder.utils import np_binary_mask
 from beras.data_utils import HDF5Tensor
 from itertools import count
 
@@ -60,23 +61,8 @@ def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
         yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
-def normalize_grid_params(grid_params):
-    p = DISTRIBUTION_PARAMS
-    bits = grid_params[:, :NUM_MIDDLE_CELLS]
-    # map bits to (-1, 1)
-    bits = 2*(bits + 1) - 3
-
-    configs = grid_params[:, NUM_MIDDLE_CELLS:]
-    angles = configs[:, CONFIG_ROTS]
-    rot_z = angles[:, :1]
-    sin_z = np.sin(rot_z)
-    cos_z = np.cos(rot_z)
-    rot_y = angles[:, 1:2] / p.y.std
-    rot_x = angles[:, 2:] / p.x.std
-    r = (configs[:, (CONFIG_RADIUS,)] - p.radius.mean) / p.radius.std
-    xy = (configs[:, CONFIG_CENTER] - p.center.mean) / p.center.std
-    return np.concatenate(
-        [bits, sin_z, cos_z, rot_y, rot_x,  xy, r], axis=1)
+def normalize_grid_params(grid_params, lecture=exam()):
+    return normalize(lecture, grid_params)
 
 
 def nb_normalized_params():
@@ -97,12 +83,12 @@ def grids_lecture_generator(batch_size=128, lecture=None):
         yield normalize_grid_params(params), grid_idx
 
 
-def mean_generator(batch_size=128):
+def mean_generator(batch_size=128, mean_distance=0.2):
     while True:
         black = np.random.uniform(0, 0.5, (batch_size, 1))
         white = np.random.uniform(0, 1., (batch_size, 1))
-        white *= 1 - (black + 0.2)
-        white += black + 0.2
+        white *= 1 - (black + mean_distance)
+        white += black + mean_distance
         yield np.concatenate([black, white], axis=1)
 
 
@@ -138,3 +124,22 @@ def z_generator(z_shape):
 def zip_real_z(real_gen, z_gen):
     for real, z in zip(real_gen, z_gen):
         yield {'real': real, 'z': z}
+
+
+def param_mean_grid_idx_generator(batch_size=128, lecture=None):
+    if lecture is None:
+        lecture = exam()
+
+    for mean, (param, grid_idx) in zip(
+            mean_generator(batch_size),
+            grids_lecture_generator(batch_size, lecture)):
+        yield np.concatenate([param, mean], axis=1), grid_idx
+
+
+def grid_with_mean(grid_idx, mean):
+    black = np_binary_mask(grid_idx, black=1, ignore=0, white=0)
+    white = np_binary_mask(grid_idx, black=0, ignore=0, white=1)
+    mask = np.zeros_like(black)
+    mask += black * mean[:, 0].reshape(-1, 1, 1, 1)
+    mask += white * mean[:, 1].reshape(-1, 1, 1, 1)
+    return mask

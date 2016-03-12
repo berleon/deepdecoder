@@ -18,7 +18,9 @@ import threading
 import numpy as np
 from math import pi
 
-from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist, TAG_SIZE
+from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist, \
+    CONFIG_ROTS, CONFIG_CENTER, CONFIG_RADIUS
+
 from keras.backend import epsilon
 from keras import callbacks
 from dotmap import DotMap
@@ -31,14 +33,17 @@ DISTRIBUTION_PARAMS = DotMap({
     'z': {'low': -pi, 'high': pi},
     'y': {'mean': 0, 'std': to_radians(12)},
     'x': {'mean': 0, 'std': to_radians(10)},
-    'center': {'mean': 0, 'std': 2},
-    'radius': {'mean': 24.5, 'std': 1},
+    'center': {'mean': 0, 'std': 0.5},
+    'radius': {'mean': 24.0, 'std': 0.4},
 })
 
 
 class Distribution:
     def sample(self, shape):
         raise NotImplementedError
+
+    def normalize(self, array):
+        return array
 
     def __eq__(self, other):
         return type(self) == type(other)
@@ -50,6 +55,9 @@ class Default(Distribution):
 
     def sample(self, shape):
         return self.distribution.sample(shape)
+
+    def normalize(self, shape):
+        return self.distribution.normalize(shape)
 
     def __eq__(self, other):
         return super().__eq__(other) and \
@@ -74,8 +82,24 @@ class Normal(Distribution):
         return super().__eq__(other) and \
             self.mean == other.mean and self.std == other.std
 
+    def normalize(self, array):
+        return (array - self.mean) / self.std
+
     def __neq__(self, other):
         return not self.__eq__(other)
+
+
+class SinCosAngleNorm(Distribution):
+    def __init__(self, distribution):
+        self.distribution = distribution
+
+    def sample(self, shape):
+        return self.distribution.sample(shape)
+
+    def normalize(self, array):
+        s = np.sin(array)
+        c = np.cos(array)
+        return np.concatenate([s, c], axis=-1)
 
 
 class Uniform(Distribution):
@@ -89,6 +113,10 @@ class Uniform(Distribution):
     def __eq__(self, other):
         return super().__eq__(other) and \
             self.low == other.low and self.high == other.high
+
+    def normalize(self, array):
+        return 2*(array - self.low) / self.high - 1
+
 
 class DiscretePoints(Distribution):
     def __init__(self, low, high, nb_points, sigma):
@@ -107,25 +135,16 @@ class DiscretePoints(Distribution):
             self.low == other.low and self.high == other.high and \
             self.nb_points == other.nb_points and self.sigma == other.sigma
 
-class ZDistribution(Distribution):
-    def __init__(self, hardness):
-        self.hardness = hardness
-
-    def sample(self, shape):
-        if self.hardness <= 0.5:
-            max_axis = 16
-            nb_axis = min(math.ceil(2*self.hardness*max_axis) + 1, max_axis)
-            offsets = 2*pi/nb_axis * np.random.choice(nb_axis, shape)
-            std = pi/16 + epsilon()
-            zs = np.random.normal(0, std, shape)
-            return zs + offsets
-        else:
-            return np.random.uniform(-pi, pi, shape)
+    def normalize(self, array):
+        return 2 * (array - self.low) / self.high - 1
 
 
 class Bernoulli(Distribution):
     def sample(self, shape):
         return np.random.binomial(1, 0.5, shape)
+
+    def normalize(self, array):
+        return 2*array - 1
 
 
 class Lecture:
@@ -141,6 +160,29 @@ class Lecture:
         self.pass_limit = pass_limit
         self.name = name
 
+    @staticmethod
+    def from_params(params, name=''):
+        p = params
+        lec = Lecture()
+        lec.name = name
+        lec.z = SinCosAngleNorm(Uniform(p['z']['low'], p['z']['high']))
+        lec.y = Normal(p['y']['mean'], p['y']['std'])
+        lec.x = Normal(p['x']['mean'], p['x']['std'])
+        lec.center = Normal(p['center']['mean'], p['center']['std'])
+        lec.radius = Normal(p['radius']['mean'], p['radius']['std'])
+        return lec
+
+    def normalize(self, ids, config):
+        n_ids = self.ids.normalize(ids)
+        n_rot_z = self.z.normalize(config[:, CONFIG_ROTS[0], np.newaxis])
+        n_rot_y = self.y.normalize(config[:, CONFIG_ROTS[1], np.newaxis])
+        n_rot_x = self.x.normalize(config[:, CONFIG_ROTS[2], np.newaxis])
+        n_center = self.center.normalize(config[:, CONFIG_CENTER])
+        n_radius = self.radius.normalize(config[:, CONFIG_RADIUS, np.newaxis])
+        n_config = np.concatenate(
+            [n_rot_z, n_rot_x, n_rot_y, n_center, n_radius], axis=1)
+        return n_ids, n_config
+
     def grid_params(self, batch_size):
         col_shape = (batch_size, 1)
         rot_z = self.z.sample(col_shape)
@@ -148,7 +190,7 @@ class Lecture:
         rot_x = self.x.sample(col_shape)
         center = self.center.sample((batch_size, 2))
         radius = self.radius.sample(col_shape)
-        config = np.concatenate([rot_z, rot_x, rot_y, center, radius], axis=1)
+        config = np.concatenate([rot_z, rot_y, rot_x, center, radius], axis=1)
         ids = self.ids.sample((batch_size, NUM_MIDDLE_CELLS))
         return ids, config
 
@@ -189,6 +231,7 @@ def z_rot_lecture(hardness, lecture=None):
     lecture.z = Uniform(-hardness*pi, hardness*pi)
     return lecture
 
+
 def z_rot_lecture_discrete(nb_points, sigma=1/360, lecture=None):
     if lecture is None:
         lecture = Lecture()
@@ -196,6 +239,7 @@ def z_rot_lecture_discrete(nb_points, sigma=1/360, lecture=None):
     nb_points = max(1, nb_points)
     lecture.z = DiscretePoints(-pi, pi, nb_points, sigma)
     return lecture
+
 
 def y_rot_lecture(hardness, lecture=None):
     if lecture is None:
@@ -213,7 +257,7 @@ def x_rot_lecture(hardness, lecture=None):
     return lecture
 
 
-class ReduceId(Distribution):
+class ReduceId(Bernoulli):
     def __init__(self, nb_ids):
         def all_ids():
             if NUM_MIDDLE_CELLS >= 16:
@@ -246,15 +290,7 @@ def reduced_id_lecture(hardness, lecture=None):
 
 
 def exam():
-    d = DISTRIBUTION_PARAMS
-    lec = Lecture()
-    lec.name = 'exam'
-    lec.z = Uniform(d.z.low, d.z.high)
-    lec.y = Normal(d.y.mean, d.y.std)
-    lec.x = Normal(d.x.mean, d.x.std)
-    lec.center = Normal(d.center.mean, d.center.std)
-    lec.radius = Normal(d.radius.mean, d.radius.std)
-    return lec
+    return Lecture.from_params(DISTRIBUTION_PARAMS, name='exam')
 
 
 class CurriculumCallback(callbacks.Callback):
@@ -264,6 +300,7 @@ class CurriculumCallback(callbacks.Callback):
         self.curriculum = curriculum
         self.lecture_id = 0
         self.losses = []
+
     def current_lecture(self):
         return self.curriculum[self.lecture_id]
 
@@ -291,6 +328,12 @@ class CurriculumCallback(callbacks.Callback):
                       .format(next_lecture_id,
                               self.curriculum[next_lecture_id].name))
                 self.lecture_id += 1
+
+
+def normalize(lecture, grid_config):
+    n_ids, n_config = lecture.normalize(grid_config[:, :NUM_MIDDLE_CELLS],
+                                        grid_config[:, NUM_MIDDLE_CELLS:])
+    return np.concatenate([n_ids, n_config], axis=1)
 
 
 def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
