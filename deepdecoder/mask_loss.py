@@ -500,44 +500,47 @@ def pyramid_loss(grid_idx, image):
     })
 
 
-def pyramid_mse_loss(grid_idx, image, mean_layer):
-    mean = mean_layer.get_output(train=True)
-    black_mean = mean[:, 0]
-    white_mean = mean[:, 1]
-    dimshuffle = (0, 'x', 'x', 'x')
-    white_mean = white_mean.dimshuffle(*dimshuffle)
-    black_mean = black_mean.dimshuffle(*dimshuffle)
-
-    tag = adaptive_mask(grid_idx, black=black_mean, ignore=0.,
-                        white=white_mean)
-    selection = binary_mask(grid_idx, black=1., ignore=0.5, white=1.)
-
+def pyramid_mse_image_loss(real_tag, reconstructed):
     max_layer = 2
-    gauss_pyr_tag = list(pyramid_gaussian(tag, max_layer))
-    gauss_pyr_selection = list(pyramid_gaussian(selection, max_layer))
 
-    diff = gauss_pyr_selection[-1]*image[:, :1] - gauss_pyr_tag[-1]
+    tag = reconstructed
+    tag_idx = (tag >= 0).nonzero()
+    selection = T.zeros_like(tag)
+    selection = T.set_subtensor(selection[tag_idx], 1)
 
-    selection_sum = T.sum(gauss_pyr_selection[-1], axis=(1, 2, 3))
+    gauss_pyr_real_tag = list(pyramid_gaussian(real_tag, max_layer))
+    gauss_pyr_real_tag = list(pyramid_gaussian(real_tag, max_layer))
+
+    real_tag_down = smooth(gauss_pyr_real_tag[-1])
+    diff = selection*real_tag_down - selection*tag
+
+    selection_sum = T.sum(selection, axis=(1, 2, 3))
+    tag_elem = real_tag_down.shape[-2] * real_tag_down.shape[-1]
+
+    min_tag_size = tag_elem / 5
+    to_small_tag = T.switch(selection_sum <= min_tag_size,
+                            (min_tag_size - selection_sum)**2,
+                            0.)
     squard_error = (diff**2).sum(axis=(1, 2, 3))
-    loss = squard_error / selection_sum.dimshuffle(*dimshuffle)
-    loss += ((image[:, 1:2] - gauss_pyr_selection[-1])**2).mean(axis=(1, 2, 3))
-
+    loss = squard_error / selection_sum
+    loss += to_small_tag
     return DotMap({
-        'loss': loss,
+        'loss': loss.reshape((-1, 1)),
         'visual': {
-            'gauss_pyr_tag': gauss_pyr_tag[-1],
-            'gauss_pyr_selection': gauss_pyr_selection[-1],
+            'gauss_pyr_real_tag': gauss_pyr_real_tag[-1],
+            'selection': selection,
+            'tag': tag,
             'diff': diff,
         },
         'print': {
             '0 loss': loss,
+            '1 selection_sum': selection_sum
         }
     })
 
 
 def to_keras_loss(loss_fn):
-    def wrapper(y_pred, y_true):
-        return loss_fn(y_pred, y_true).loss
+    def wrapper(y_true, y_pred):
+        return loss_fn(y_true, y_pred).loss
 
     return wrapper
