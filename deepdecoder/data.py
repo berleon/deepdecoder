@@ -25,11 +25,18 @@ import h5py
 
 from deepdecoder.grid_curriculum import exam, grids_from_lecture, \
     DISTRIBUTION_PARAMS, normalize
-from deepdecoder.utils import np_binary_mask
+from beesgrid import MASK
 from beras.data_utils import HDF5Tensor
 from itertools import count
 
 floatX = theano.config.floatX
+
+
+def np_binary_mask(mask, black=0., ignore=0.5,  white=1.):
+    bw = ignore * np.ones_like(mask, dtype=np.float32)
+    bw[mask > MASK["IGNORE"]] = white
+    bw[mask < MASK["BACKGROUND_RING"]] = black
+    return bw
 
 
 def normalize_angle(angle, lower_bound=0):
@@ -126,12 +133,13 @@ def zip_real_z(real_gen, z_gen):
         yield {'real': real, 'z': z}
 
 
-def param_mean_grid_idx_generator(batch_size=128, lecture=None):
+def param_mean_grid_idx_generator(batch_size=128, lecture=None,
+                                  mean_distance=0.2):
     if lecture is None:
         lecture = exam()
 
     for mean, (param, grid_idx) in zip(
-            mean_generator(batch_size),
+            mean_generator(batch_size, mean_distance),
             grids_lecture_generator(batch_size, lecture)):
         yield np.concatenate([param, mean], axis=1), grid_idx
 
