@@ -18,10 +18,10 @@ from keras.layers.core import Dense, Flatten, Reshape
 from keras.optimizers import Adam
 from beesgrid import TAG_SIZE
 from deepdecoder.networks import gan_with_z_rot90_grid_idx, dcgan_generator, \
-    NB_GAN_GRID_PARAMS, mogan_learn_bw_grid, dcgan_discriminator, \
-    add_diff_rot90
-from deepdecoder.data import gen_diff_gan
+    mogan_learn_bw_grid, dcgan_discriminator, \
+    dcgan_small_generator, dcgan_pyramid_mse_generator
 import pytest
+import keras.backend as K
 
 
 def test_networks_gan_with_z_rot90_grid_idx():
@@ -49,3 +49,15 @@ def test_networks_gan_with_z_rot90_grid_idx():
 def test_mogan_learn_bw_grid():
     gan, _ = mogan_learn_bw_grid(dcgan_generator, dcgan_discriminator)
     gan.compile()
+
+
+def test_autoencoder_mask_generator_loading(tmpdir):
+    nb_input = 21
+    g = dcgan_small_generator(input_dim=nb_input, nb_output_channels=2)
+    fname = str(tmpdir) + "/g.hdf5"
+    g.save_weights(fname)
+
+    g_load = dcgan_small_generator(input_dim=nb_input, nb_output_channels=2)
+    g_load.load_weights(fname)
+    for a, b in zip(g.trainable_weights, g_load.trainable_weights):
+        assert (K.get_value(a) == K.get_value(b)).all()

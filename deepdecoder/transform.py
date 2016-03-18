@@ -18,6 +18,8 @@ from more_itertools import pairwise
 from keras.layers.core import Layer
 from deepdecoder.utils import binary_mask, adaptive_mask
 import keras.backend as K
+from theano.ifelse import ifelse
+
 
 def pyramid_expand(image, sigma=2/3):
     """
@@ -130,3 +132,56 @@ class PyramidBlendingGridIdx(Layer):
                 img = low
             img = upsample(img) + high
         return img
+
+
+class PyramidBlending(Layer):
+    def __init__(self, mask_layer, a_pyramid_layers=3, b_pyramid_layers=3,
+                 use_blending=None,
+                 **kwargs):
+        self.a_pyramid_layers = a_pyramid_layers
+        self.b_pyramid_layers = b_pyramid_layers
+        self.mask_layer = mask_layer
+        self.max_pyramid_layers = max(a_pyramid_layers, b_pyramid_layers)
+        if use_blending is None:
+            use_blending = K.variable(1)
+        self.use_blending = use_blending
+        super().__init__(**kwargs)
+
+    @property
+    def output_shape(self):
+        shp = self.input_shape
+        return (shp[0], 1) + shp[2:]
+
+    def get_output(self, train=False):
+        def fill_none(lst):
+            return [None] * (self.max_pyramid_layers - len(lst)) + lst
+
+        a = self.get_input(train)
+        b = self.mask_layer.get_output(train)
+        mask = K.cast(b < -0.1, 'float32')
+
+        gauss_pyr_a = list(pyramid_gaussian(a, self.a_pyramid_layers))
+        gauss_pyr_b = list(pyramid_gaussian(b, self.b_pyramid_layers))
+        gauss_pyr_mask = list(pyramid_gaussian(mask, self.b_pyramid_layers))
+
+        pyr_masks = [1]*(self.max_pyramid_layers - 1) + gauss_pyr_mask[-1:]
+
+        lap_pyr_a = fill_none(pyramid_laplace(gauss_pyr_a) + gauss_pyr_a[-1:])
+        lap_pyr_b = fill_none(pyramid_laplace(gauss_pyr_b) + gauss_pyr_b[-1:])
+
+        blend_pyr = []
+        for mask, lap_a, lap_b in zip(pyr_masks, lap_pyr_a, lap_pyr_b):
+            if lap_a is None:
+                lap_a = K.zeros_like(lap_b)
+            elif lap_b is None:
+                lap_b = K.zeros_like(lap_a)
+
+            blend = lap_a*mask + lap_b*(1 - mask)
+            blend_pyr.append(blend)
+
+        img = None
+        for low, high in pairwise(reversed(blend_pyr)):
+            if img is None:
+                img = low
+            img = upsample(img) + high
+        return ifelse(self.use_blending, img, a)

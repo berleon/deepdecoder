@@ -28,7 +28,7 @@ from deepdecoder.grid_curriculum import exam, grids_from_lecture, \
 from beesgrid import MASK
 from beras.data_utils import HDF5Tensor
 from itertools import count
-
+from skimage.transform import pyramid_reduce
 floatX = theano.config.floatX
 
 
@@ -151,3 +151,55 @@ def grid_with_mean(grid_idx, mean):
     mask += black * mean[:, 0].reshape(-1, 1, 1, 1)
     mask += white * mean[:, 1].reshape(-1, 1, 1, 1)
     return mask
+
+
+MASK_MEAN_PARTS = [
+    ("BACKGROUND_RING", "IGNORE"),
+    ("INNER_BLACK_SEMICIRCLE",),
+    ("CELL_0_BLACK", "CELL_0_WHITE"),
+    ("CELL_1_BLACK", "CELL_1_WHITE"),
+    ("CELL_2_BLACK", "CELL_2_WHITE"),
+    ("CELL_3_BLACK", "CELL_3_WHITE"),
+    ("CELL_4_BLACK", "CELL_4_WHITE"),
+    ("CELL_5_BLACK", "CELL_5_WHITE"),
+    ("CELL_6_BLACK", "CELL_6_WHITE"),
+    ("CELL_7_BLACK", "CELL_7_WHITE"),
+    ("CELL_8_BLACK", "CELL_8_WHITE"),
+    ("CELL_9_BLACK", "CELL_9_WHITE"),
+    ("CELL_10_BLACK", "CELL_10_WHITE"),
+    ("CELL_11_BLACK", "CELL_11_WHITE"),
+    ("OUTER_WHITE_RING",),
+    ("INNER_WHITE_SEMICIRCLE",),
+]
+
+
+def np_mean_mask(grid_idx, means):
+    mask = np.zeros_like(grid_idx, dtype=np.float32)
+    for i in range(len(grid_idx)):
+        for c, mask_idxs in enumerate(MASK_MEAN_PARTS):
+            idx = np.zeros_like(mask[i], dtype=np.bool)
+            for mask_idx in mask_idxs:
+                idx = np.logical_or(idx, np.equal(MASK[mask_idx], grid_idx[i]))
+
+            mask[i, idx] = means[i, c]
+    return mask
+
+
+def resize_mask(masks):
+    resized = []
+    for mask in masks:
+        smaller = pyramid_reduce(mask[0])
+        resized.append(smaller)
+    return np.stack(resized).reshape((len(masks), 1, 32, 32))
+
+
+def param_mask_mean_generator(lecture, batch_size=128):
+    for param, grid_idx in grids_lecture_generator(batch_size, lecture):
+        means = np.random.uniform(0, 1, (len(param), len(MASK_MEAN_PARTS)))
+        # set ignore to -0.5
+        means[:, 0] = -0.5
+        mask = np_mean_mask(grid_idx, means)
+        means = 2*means - 1
+        param = np.concatenate(
+            [means[:, 1:], param[:, NUM_MIDDLE_CELLS:]], axis=1)
+        yield param, resize_mask(np.clip(mask, -1, 1))

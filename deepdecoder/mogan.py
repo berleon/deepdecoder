@@ -13,55 +13,40 @@
 # limitations under the License.
 
 
-from beras.gan import GAN
+from beras.gan import GAN, flatten
 from deepdecoder.mutliple_objectives import MultipleObjectives
 import keras.backend as K
 from keras.objectives import binary_crossentropy
+from keras.optimizers import SGD
+from copy import copy
 
 
-class MOGAN:
-    def __init__(self, gan: GAN, loss_fn, optimizer_fn,
-                 name="mogan",
-                 gan_objective=binary_crossentropy,
-                 gan_regulizer=None):
-        assert len(gan.conditionals) >= 1
-        v = gan.build_loss(objective=gan_objective)
-        y_true = K.placeholder(shape=gan.G.outputs["output"].output_shape)
-        inputs = [v.real, y_true] + v.gen_conditionals
-        cond_loss = loss_fn(y_true, v.g_outmap)
-        gan.build_opt_d(optimizer_fn(), v)
-        gan_regulizer = GAN.get_regulizer(gan_regulizer)
-        v.g_loss, v.d_loss, v.reg_updates = \
-            gan_regulizer.get_losses(gan, v.g_loss, v.d_loss)
-        self.build_dict = v
-        self.gan = gan
-        self.optimizer_fn = optimizer_fn
-        metrics = {
-            "cond_loss": cond_loss.mean(),
-            "d_loss": v.d_loss,
-            "g_loss": v.g_loss,
-        }
-        if type(gan_regulizer) == GAN.L2Regularizer:
-            metrics["l2"] = gan_regulizer.l2_coef
-        self.mulit_objectives = MultipleObjectives(
-                name, inputs,
-                metrics=metrics,
-                params=gan.G.params,
-                objectives={'g_loss': v.g_loss, 'cond_loss': cond_loss},
-                additional_updates=v.d_updates + v.reg_updates)
+def mogan(self, gan: GAN, loss_fn, d_optimizer, name="mogan",
+          gan_objective=binary_crossentropy, gan_regulizer=None,
+          cond_true_ndim=4):
+    assert len(gan.conditionals) >= 1
 
-    def compile(self):
-        self.gan._compile_generate(self.build_dict)
-        self.mulit_objectives.compile(self.optimizer_fn)
+    g_dummy_opt = SGD()
+    d_optimizer = d_optimizer
+    v = gan.build(g_dummy_opt, d_optimizer, gan_objective)
+    del v['g_updates']
 
-    def fit(self, input_dict, batch_size=128, nb_epoch=100, verbose=0,
-            nb_iterations=None, callbacks=None, shuffles=True):
-        inputs = [input_dict['real'], input_dict['grid_bw']]
-        del input_dict['real']
-        del input_dict['grid_bw']
-        inputs.extend(self.gan._conditionals_to_list(input_dict))
+    cond_true = K.placeholder(ndim=cond_true_ndim)
+    inputs = copy(gan.graph.inputs)
+    inputs['cond_true'] = cond_true
 
-        self.mulit_objectives.fit(
-            inputs, batch_size=batch_size, nb_epoch=nb_epoch, verbose=verbose,
-            nb_iterations=nb_iterations, callbacks=callbacks,
-            shuffles=shuffles)
+    cond_loss = loss_fn(cond_true, v.g_outmap)
+
+    metrics = {
+        "cond_loss": cond_loss.mean(),
+        "d_loss": v.d_loss,
+        "g_loss": v.g_loss,
+    }
+
+    params = flatten([n.trainable_weights
+                      for n in gan.get_generator_nodes().values()])
+
+    return MultipleObjectives(
+        name, inputs, metrics=metrics, params=params,
+        objectives={'g_loss': v['g_loss'], 'cond_loss': cond_loss},
+        additional_updates=v['d_updates'] + gan.updates)

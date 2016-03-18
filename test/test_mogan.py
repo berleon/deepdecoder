@@ -24,7 +24,7 @@ from keras.models import Sequential
 from keras.optimizers import Adam
 from keras.objectives import mse
 
-from deepdecoder.mogan import MOGAN
+from deepdecoder.mogan import mogan
 import keras.backend as K
 import numpy as np
 
@@ -87,10 +87,7 @@ def test_mogan():
         generator.add(Dense(50, activation='relu'))
         generator.add(Dense(50, activation='relu'))
         generator.add(Dense(simple_gan_nb_out))
-        generator = asgraph(generator, inputs={
-            GAN.z_name: (simple_gan_nb_z, ),
-            "cond": (simple_gan_nb_cond, ),
-        }, concat_axis=1)
+
         discriminator = Sequential()
         discriminator.add(Dense(25, activation='relu', input_dim=2))
         discriminator.add(Dense(1, activation='sigmoid'))
@@ -126,15 +123,14 @@ def test_mogan():
 
     bs = simple_gan_batch_size*25
 
-    def optimizer_lambda():
-        return Adam(lr=0.0002, beta_1=0.5)
+    d_optimizer = Adam(lr=0.0002, beta_1=0.5)
 
     gan = simple_gan()
-    mogan = MOGAN(gan, loss_fn, optimizer_lambda, gan_objective='mse')
-    mogan.compile()
+    mo_gan = mogan(gan, loss_fn, d_optimizer)
+    mo_gan.compile()
     expected_val, _ = expected(bs)
     print(expected_val.shape)
-    mogan.mulit_objectives.fit(
+    mo_gan.fit(
             [data(bs), expected_val, expected_val],
             batch_size=gan.batch_size, verbose=1, nb_epoch=100,
             callbacks=[Plotter(data(3000), sample_fn=generate)])

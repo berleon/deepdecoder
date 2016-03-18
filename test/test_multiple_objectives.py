@@ -14,22 +14,25 @@
 
 from keras.optimizers import SGD
 
-from deepdecoder.mutliple_objectives import MultipleObjectives
+from deepdecoder.mutliple_objectives import MultipleObjectives, SumLossOptimizer
 import keras.backend as K
 import numpy as np
 
 
 def test_multiple_objectives():
     x = K.variable(np.cast[np.float32](20.))
-    inputs = []
+    inputs = {}
     parable = x**2
     line = -x + 2
     optima = 0.5
     outputs = {'parable': parable, 'line': line}
     params = [x]
-    mo = MultipleObjectives('par-line', inputs, outputs, params,
-                            objectives=[parable, line])
-    mo.compile(lambda: SGD(lr=0.1))
+    mo = MultipleObjectives('par-line', inputs,
+                            params=params,
+                            metrics=outputs,
+                            objectives={'parable': parable,
+                                        'line': line})
+    mo.compile(SumLossOptimizer(SGD(lr=0.1)))
     mo.fit([], nb_epoch=10, nb_iterations=10, verbose=1)
 
     x_value = K.get_value(mo.params[0])

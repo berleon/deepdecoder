@@ -38,7 +38,7 @@ def binary_mask(mask, black=0., ignore=0.5,  white=1.):
     return bw
 
 
-def adaptive_mask(mask, black=0.5, ignore=0.5, white=1.):
+def adaptive_mask(mask, black=0., ignore=0.5, white=1.):
     bw = ignore * T.ones_like(mask, dtype=floatX)
     t_black = black*T.ones_like(bw, dtype=floatX)
     t_white = white*T.ones_like(bw, dtype=floatX)

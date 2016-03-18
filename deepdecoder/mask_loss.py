@@ -31,7 +31,8 @@ from pycuda.compiler import SourceModule
 import theano.misc.pycuda_init
 from deepdecoder.utils import binary_mask, adaptive_mask
 from deepdecoder.transform import pyramid_gaussian
-import keras.objectives
+
+
 _has_cuda = True
 try:
     from theano.misc.pycuda_utils import to_gpuarray, to_cudandarray
@@ -500,6 +501,17 @@ def pyramid_loss(grid_idx, image):
     })
 
 
+def mse_sobel(y_true, y_pred, sobel_weight):
+    def mse(x, y):
+        squre_error = (x - y)**2
+        return squre_error.mean(axis=(1, 2, 3)).reshape((-1, 1))
+
+    def edges(img):
+        x, y = sobel(img, add_border=False)
+        return T.sqrt(x**2 + y**2)
+    return mse(y_true, y_pred) + sobel_weight*mse(edges(y_true), edges(y_pred))
+
+
 def pyramid_mse_image_loss(real_tag, reconstructed):
     max_layer = 2
 
@@ -517,7 +529,7 @@ def pyramid_mse_image_loss(real_tag, reconstructed):
     selection_sum = T.sum(selection, axis=(1, 2, 3))
     tag_elem = real_tag_down.shape[-2] * real_tag_down.shape[-1]
 
-    min_tag_size = tag_elem / 5
+    min_tag_size = tag_elem / 6
     to_small_tag = T.switch(selection_sum <= min_tag_size,
                             (min_tag_size - selection_sum)**2,
                             0.)
