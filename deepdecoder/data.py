@@ -28,7 +28,9 @@ from deepdecoder.grid_curriculum import exam, grids_from_lecture, \
 from beesgrid import MASK
 from beras.data_utils import HDF5Tensor
 from itertools import count
-from skimage.transform import pyramid_reduce
+from skimage.transform import pyramid_reduce, pyramid_laplacian, \
+    pyramid_expand, pyramid_gaussian
+
 floatX = theano.config.floatX
 
 
@@ -124,9 +126,29 @@ def real_generator(hdf5_fname, nb_real, use_mean_image=False, range=(0, 1)):
         yield (high - low)*tag_batch + low
 
 
+def weight_pyramid(generator, weights=[1, 1, 1]):
+    nb_layers = len(weights) - 1
+    for batch in generator:
+        batch_merged = []
+        for img in batch:
+            img = img[0]
+            lap_pyr = []
+            prev = img
+            for i in range(nb_layers):
+                gauss = pyramid_reduce(prev)
+                lap_pyr.append(prev - pyramid_expand(gauss))
+                prev = gauss
+
+            merged = gauss*weights[0]
+            for i, lap in enumerate(reversed(lap_pyr)):
+                merged = pyramid_expand(merged) + weights[i+1]*lap
+            batch_merged.append(merged)
+        yield np.stack(batch_merged).reshape(batch.shape)
+
+
 def z_generator(z_shape):
     while True:
-        yield np.random.uniform(-1, 1, z_shape)
+        yield np.random.uniform(-1, 1, z_shape).astype(np.float32)
 
 
 def zip_real_z(real_gen, z_gen):
