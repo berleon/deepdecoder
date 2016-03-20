@@ -16,25 +16,24 @@
 from keras.models import Sequential, Graph
 from keras.objectives import mse, binary_crossentropy
 import keras.initializations
-from keras.layers.core import Dense, Dropout, Flatten, Reshape, Activation, \
+from keras.layers.core import Dense, Flatten, Reshape, Activation, \
     Layer
 from keras.layers.convolutional import Convolution2D, MaxPooling2D
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.normalization import BatchNormalization
-from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE, CONFIG_ROTS
+from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE
 from beras.layers.attention import RotationTransformer, GraphSpatialTransformer
 from beras.layers.transform import iDCT
 from beras.gan import GAN, add_gan_outputs
 from beras.models import asgraph
 from beras.regularizers import ActivityInBoundsRegularizer
-from beras.layers.core import Split, Swap, ZeroGradient, LinearInBounds
+from beras.layers.core import Split, ZeroGradient, LinearInBounds
 from deepdecoder.deconv import Deconvolution2D
 from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
 from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
-from deepdecoder.mogan import mogan
 from deepdecoder.data import nb_normalized_params
 from deepdecoder.mask_loss import pyramid_loss
-from deepdecoder.transform import PyramidBlending
+from deepdecoder.transform import PyramidBlending, PyramidReduce
 import theano
 import numpy as np
 import copy
@@ -365,6 +364,44 @@ def mask_blending_gan_hyperopt(mask_driver, mask_generator, discriminator,
                     fake_for_dis=(nb_fake - nb_real, nb_fake),
                     real=(nb_fake, nb_fake+nb_real))
     return g
+
+
+def get_offset_generator(n=32, batch_input_shape=50, nb_output_channels=1,
+                         init=normal(0.02), merge_mode=None, merge_layer=None):
+    def deconv(model, nb_filter, h, w):
+        model.add(Deconvolution2D(nb_filter, h, w, subsample=(2, 2),
+                                  border_mode=(2, 2), init=init))
+        model.add(BatchNormalization(axis=1))
+        model.add(Activation('relu'))
+
+    front = Sequential()
+    front.add(Dense(8*n*4*4, batch_input_shape=batch_input_shape, init=init))
+    front.add(BatchNormalization())
+    front.add(Activation('relu'))
+    front.add(Reshape((8*n, 4, 4,)))
+
+    deconv(front, 4*n, 5, 5)
+    deconv(front, 2*n, 5, 5)
+
+    if merge_mode != 'merge_16':
+        deconv(front, n, 5, 5)
+
+    input_shape = list(front.output_shape)
+    if merge_layer is not None:
+        input_shape[1] += merge_layer.output_shape[1]
+
+    input_shape = tuple(input_shape)
+    back = Sequential()
+    back.add(Layer(batch_input_shape=input_shape))
+
+    if merge_mode == 'merge_16':
+        deconv(back, n, 5, 5)
+
+    back.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
+                             border_mode=(2, 2), init=init))
+    back.add(LinearInBounds())
+    return front, back
+
 
 def dcgan_generator(n=32, input_dim=50, nb_output_channels=1, use_dct=False,
                     init=normal(0.02)):
