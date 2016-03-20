@@ -134,6 +134,18 @@ class PyramidBlendingGridIdx(Layer):
         return img
 
 
+class PyramidReduce(Layer):
+    @property
+    def output_shape(self):
+        shp = self.input_shape
+        return shp[:2] + (shp[2] // 2, shp[3] // 2)
+
+    def get_output(self, train=False):
+        x = self.get_input(train)
+        # map [0; 1] to [-1, 1]
+        return 2*pyramid_reduce(x) - 1
+
+
 class PyramidBlending(Layer):
     def __init__(self, mask_layer, a_pyramid_layers=3, b_pyramid_layers=3,
                  use_blending=None,
