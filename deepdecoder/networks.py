@@ -23,10 +23,11 @@ from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.normalization import BatchNormalization
 from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE, CONFIG_ROTS
 from beras.layers.attention import RotationTransformer, GraphSpatialTransformer
+from beras.layers.transform import iDCT
 from beras.gan import GAN, add_gan_outputs
 from beras.models import asgraph
 from beras.regularizers import ActivityInBoundsRegularizer
-from beras.layers.core import Split, Swap, ZeroGradient
+from beras.layers.core import Split, Swap, ZeroGradient, LinearInBounds
 from deepdecoder.deconv import Deconvolution2D
 from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
 from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
@@ -151,7 +152,6 @@ def autoencoder_mask_decoder(nb_output=21, batch_size=128,
 def batch_norm():
     mode = 0
     bn = BatchNormalization(mode, axis=1)
-    bn.init = keras.initializations.one
     return bn
 
 
@@ -266,7 +266,107 @@ def autoencoder_with_mask_loss(encoder, decoder, batch_size=128):
     return encoder
 
 
-def dcgan_generator(n=32, input_dim=50, nb_output_channels=1,
+def get_mask_driver(input_dim, output_dim):
+    model = Sequential()
+    model.add(Dense(32, input_dim=input_dim))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(Dense(output_dim))
+    model.add(BatchNormalization())
+    return model
+
+
+def mask_blending_gan_hyperopt(mask_driver, mask_generator, discriminator,
+                               offset_inputs=['gen_driver'],
+                               offset_nb_units=64,
+                               merge='merge_16',
+                               nb_merge_conv_layers=0,
+                               z_dim=50,
+                               nb_fake=64, nb_real=32):
+    assert len(mask_generator.input_shape) == 2
+
+    def add_offset_generator(front, back, merge_mode):
+        if 'gen_driver_zero_grad' in offset_inputs:
+            g.add_node(ZeroGradient(), 'gen_driver_zero_grad',
+                       input='gen_driver')
+        if len(offset_inputs) == 1:
+            g.add_node(offset_front, 'gen_offset_front',
+                       input=offset_inputs[0])
+        else:
+            g.add_node(offset_front, 'gen_offset_front', input=offset_inputs)
+        if merge_mode is None:
+            g.add_node(offset_back, 'gen_offset', input='gen_offset_front')
+        else:
+            g.add_node(offset_back, 'gen_offset',
+                       inputs=['gen_offset_front', 'gen_offset_merge_mask'],
+                       concat_axis=1)
+
+    def offset_input_dim():
+        dim = 0
+        layer_dims = {
+            'gen_driver': g.nodes['gen_driver'].output_shape[-1],
+            'gen_driver_zero_grad': g.nodes['gen_driver'].output_shape[-1],
+            GAN.z_name: z_dim
+        }
+        for name in offset_inputs:
+            dim += layer_dims[name]
+        return dim
+
+    def add_offset_merge_mask():
+        model = Sequential()
+        if merge == 'merge_16':
+            input = 'mask_generator_down'
+        elif merge == 'merge_32':
+            input = 'mask_generator'
+        model.add(Layer(batch_input_shape=g.nodes[input].output_shape))
+        for i in range(int(nb_merge_conv_layers)):
+            model.add(Convolution2D(24, 3, 3, border_mode='same'))
+            model.add(BatchNormalization(axis=1))
+            model.add(Activation('relu'))
+        name = 'gen_offset_merge_mask'
+        g.add_node(model, name, input=input)
+
+    g = Graph()
+    z_shape = (nb_fake, z_dim)
+
+    g.add_input(GAN.z_name, batch_input_shape=z_shape)
+
+    g.add_node(mask_driver, 'gen_driver', input=GAN.z_name)
+
+    g.add_node(mask_generator, 'mask_generator', input='gen_driver')
+    mask = PyramidReduce()
+    g.add_node(mask, 'mask_generator_down', input='mask_generator')
+
+    offset_merge_layer = None
+    if merge:
+        add_offset_merge_mask()
+        offset_merge_layer = g.nodes['gen_offset_merge_mask']
+
+    offset_front, offset_back = get_offset_generator(
+        offset_nb_units,
+        batch_input_shape=(nb_fake, offset_input_dim()),
+        merge_mode=merge,
+        merge_layer=offset_merge_layer
+    )
+
+    add_offset_generator(offset_front, offset_back, merge)
+
+    g.add_node(PyramidBlending(mask, a_pyramid_layers=3,
+                               b_pyramid_layers=1),
+               'blending', input='gen_offset')
+
+    g.add_node(LinearInBounds(), GAN.generator_name, input='blending')
+
+    real_shape = (nb_real,) + g.nodes[GAN.generator_name].output_shape[1:]
+    g.add_input(GAN.real_name, batch_input_shape=real_shape)
+    g.add_node(discriminator, "discriminator",
+               inputs=[GAN.generator_name, "real"], concat_axis=0)
+    add_gan_outputs(g, fake_for_gen=(0, nb_fake - nb_real),
+                    fake_for_dis=(nb_fake - nb_real, nb_fake),
+                    real=(nb_fake, nb_fake+nb_real))
+    return g
+
+def dcgan_generator(n=32, input_dim=50, nb_output_channels=1, use_dct=False,
                     init=normal(0.02)):
 
     def deconv(nb_filter, h, w):
@@ -275,8 +375,10 @@ def dcgan_generator(n=32, input_dim=50, nb_output_channels=1,
     model = Sequential()
     model.add(Dense(8*n*4*4, input_dim=input_dim, init=init))
     model.add(batch_norm())
-    model.add(Activation('relu'))
     model.add(Reshape((8*n, 4, 4,)))
+    if use_dct:
+        model.add(iDCT())
+    model.add(Activation('relu'))
 
     model.add(deconv(4*n, 5, 5))
     model.add(batch_norm())
@@ -292,11 +394,7 @@ def dcgan_generator(n=32, input_dim=50, nb_output_channels=1,
 
     model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
                               border_mode=(2, 2), init=init))
-    act = Activation('linear')
-    reg = ActivityInBoundsRegularizer(-1, 1)
-    reg.set_layer(act)
-    act.regularizers = [reg]
-    model.add(act)
+    model.add(LinearInBounds(-1, 1))
     return model
 
 
