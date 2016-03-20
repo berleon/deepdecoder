@@ -157,12 +157,9 @@ class PyramidBlending(Layer):
         if use_blending is None:
             use_blending = K.variable(1)
         self.use_blending = use_blending
+        self.weights = [K.variable(1)
+                        for i in range(self.max_pyramid_layers)]
         super().__init__(**kwargs)
-
-    @property
-    def output_shape(self):
-        shp = self.input_shape
-        return (shp[0], 1) + shp[2:]
 
     def get_output(self, train=False):
         def fill_none(lst):
@@ -192,8 +189,8 @@ class PyramidBlending(Layer):
             blend_pyr.append(blend)
 
         img = None
-        for low, high in pairwise(reversed(blend_pyr)):
+        for i, (low, high) in enumerate(pairwise(reversed(blend_pyr))):
             if img is None:
-                img = low
-            img = upsample(img) + high
+                img = low*self.weights[i]
+            img = upsample(img) + self.weights[i]*high
         return ifelse(self.use_blending, img, a)
