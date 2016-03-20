@@ -108,7 +108,8 @@ def load_real_hdf5_tags(fname, batch_size):
     return tags
 
 
-def real_generator(hdf5_fname, nb_real, use_mean_image=False):
+def real_generator(hdf5_fname, nb_real, use_mean_image=False, range=(0, 1)):
+    low, high = range
     tags = load_real_hdf5_tags(hdf5_fname, nb_real)
     nb_tags = len(tags)
     print("Got {} real tags".format(nb_tags))
@@ -120,7 +121,7 @@ def real_generator(hdf5_fname, nb_real, use_mean_image=False):
         tag_batch = tags[ti:ti+nb_real] / 255
         if use_mean_image:
             tag_batch -= mean_image
-        yield tag_batch
+        yield (high - low)*tag_batch + low
 
 
 def z_generator(z_shape):
