@@ -209,7 +209,8 @@ def mask_generator_with_conv(nb_units=64, input_dim=20, init=normal(0.02),
 
 
 def dcgan_small_generator(nb_units=64, input_dim=20, init=normal(0.02),
-                          nb_output_channels=1, filter_size=3):
+                          nb_output_channels=1, filter_size=3, conv_layers=False,
+                          output_size=32):
     n = nb_units
 
     def deconv(nb_filter, h, w):
@@ -226,12 +227,23 @@ def dcgan_small_generator(nb_units=64, input_dim=20, init=normal(0.02),
 
     model.add(deconv(4*n, 3, 3))
     model.add(Activation('relu'))
+    if conv_layers:
+        model.add(Convolution2D(4*n, 3, 3,
+                                border_mode='same', activation='relu'))
 
-    model.add(deconv(2*n, 3, 3))
-    model.add(Activation('relu'))
+    if output_size >= 16:
+        model.add(deconv(2*n, 3, 3))
+        model.add(Activation('relu'))
+        if conv_layers:
+            model.add(Convolution2D(2*n, 3, 3,
+                                    border_mode='same', activation='relu'))
 
-    model.add(deconv(n, 3, 3))
-    model.add(Activation('relu'))
+    if output_size == 32:
+        model.add(deconv(n, 3, 3))
+        model.add(Activation('relu'))
+        if conv_layers:
+            model.add(Convolution2D(n, 3, 3,
+                                    border_mode='same', activation='relu'))
 
     model.add(Deconvolution2D(nb_output_channels,
                               3, 3, border_mode=(1, 1), init=init))
