@@ -16,7 +16,7 @@
 from keras import initializations
 from theano.sandbox.cuda.dnn import GpuDnnConvDesc, GpuDnnConvGradI, \
     gpu_alloc_empty
-from theano.sandbox.cuda.basic_ops import host_from_gpu
+from theano.sandbox.cuda.basic_ops import gpu_contiguous
 from keras.layers.core import Layer
 import keras.backend as K
 
@@ -53,8 +53,8 @@ class Deconvolution2D(Layer):
         sets up dummy convolutional forward pass and uses its grad as deconv
         currently only tested/working with same padding
         """
-        img = self.get_input(train)
-        kerns = self.W
+        img = gpu_contiguous(self.get_input(train))
+        kerns = gpu_contiguous(self.W)
         sr, sc = self.subsample
         out = gpu_alloc_empty(img.shape[0], kerns.shape[1],
                               img.shape[2]*sr, img.shape[3]*sc)
