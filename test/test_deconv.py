@@ -16,6 +16,13 @@
 from conftest import on_gpu
 import theano
 from keras.models import Sequential
+from keras.layers.convolutional import Convolution2D
+
+from keras.layers.normalization import BatchNormalization
+from keras.layers.core import Dense, Flatten, Reshape, Activation, \
+    Layer
+
+from beras.layers.core import Split, ZeroGradient, LinearInBounds
 
 from deepdecoder.deconv import Deconvolution2D
 import numpy as np
@@ -65,3 +72,23 @@ def test_deconvolution2d():
     img = np.random.sample((64, 1, 16, 16)).astype(np.float32)
     deconv_out = fn(img)
     assert deconv_out.shape == (64, 10, 32, 32)
+
+
+@pytest.mark.skipif(not on_gpu(), reason="only works with cuda")
+def test_deconvolution2d_with_conv2d_gpu_contiguous():
+    input_shape = (64, 1, 8, 8)
+    model = Sequential()
+    model.add(Layer(batch_input_shape=input_shape))
+    model.add(Deconvolution2D(8, 3, 3, subsample=(1, 1),
+                              border_mode=(1, 1)))
+    model.add(BatchNormalization(axis=1))
+    model.add(Activation('relu'))
+    model.add(Convolution2D(10, 3, 3, border_mode='same'))
+    model.add(BatchNormalization(axis=1))
+    model.add(Activation('relu'))
+    model.add(Deconvolution2D(1, 3, 3, subsample=(2, 2),
+                              border_mode=(1, 1)))
+    model.compile('sgd', 'mse')
+
+    img = np.random.sample((64, 1, 16, 16)).astype(np.float32)
+    model.predict(img)
