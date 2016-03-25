@@ -30,6 +30,11 @@ from beras.data_utils import HDF5Tensor
 from itertools import count
 from skimage.transform import pyramid_reduce, pyramid_laplacian, \
     pyramid_expand, pyramid_gaussian
+from skimage.filters import gaussian_filter
+
+import scipy.ndimage.interpolation
+import scipy.ndimage
+
 
 floatX = theano.config.floatX
 
@@ -164,7 +169,7 @@ def param_mean_grid_idx_generator(batch_size=128, lecture=None,
     for mean, (param, grid_idx) in zip(
             mean_generator(batch_size, mean_distance),
             grids_lecture_generator(batch_size, lecture)):
-        yield np.concatenate([param, mean], axis=1), grid_idx
+        yielself.selection_threshold.concatenate([param, mean], axis=1), grid_idx
 
 
 def grid_with_mean(grid_idx, mean):
@@ -208,21 +213,44 @@ def np_mean_mask(grid_idx, means):
     return mask
 
 
-def resize_mask(masks):
+def resize_mask(masks, order=1, sigma=0.66):
     resized = []
     for mask in masks:
-        smaller = pyramid_reduce(mask[0])
-        resized.append(smaller)
+        smoothed = scipy.ndimage.gaussian_filter(mask[0], sigma=sigma)
+        small = scipy.ndimage.interpolation.zoom(smoothed, (0.5, 0.5), order=order)
+        resized.append(small)
     return np.stack(resized).reshape((len(masks), 1, 32, 32))
 
 
-def param_mask_mean_generator(lecture, batch_size=128):
+def param_mask_mean_generator(lecture, batch_size=128, ignore=-1):
+    def bit_mean_squash(bits, inflection=0.5, squash_factor=10):
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+        return sigmoid(squash_factor*(bits - inflection))
+
     for param, grid_idx in grids_lecture_generator(batch_size, lecture):
         means = np.random.uniform(0, 1, (len(param), len(MASK_MEAN_PARTS)))
-        # set ignore to -0.5
-        means[:, 0] = -0.5
-        mask = np_mean_mask(grid_idx, means)
+        means[:, 0] = ignore
+        white_ring = MASK_MEAN_PARTS.index(("INNER_WHITE_SEMICIRCLE",))
+        black_ring = MASK_MEAN_PARTS.index(("INNER_BLACK_SEMICIRCLE",))
+        outer_ring = MASK_MEAN_PARTS.index(("OUTER_WHITE_RING",))
+        mean_for_masks = means.copy()
+        min_black_white_dist = 0.20
+        black_shrink = 0.5
+
+        bits = slice(2, 2+12)
+        mean_for_masks[:, bits] = bit_mean_squash(mean_for_masks[:, bits])
+
+        mean_for_masks[:, outer_ring] = 0.66*mean_for_masks[:, outer_ring] + 0.34
+
+        mean_for_masks[:, black_ring] *= black_shrink
+        black = mean_for_masks[:, black_ring]
+
+        mean_for_masks[:, white_ring] = black + \
+            (1 - black) * mean_for_masks[:, white_ring] + min_black_white_dist
+
+        mask = np_mean_mask(grid_idx, mean_for_masks)
         means = 2*means - 1
         param = np.concatenate(
             [means[:, 1:], param[:, NUM_MIDDLE_CELLS:]], axis=1)
-        yield param, resize_mask(np.clip(mask, -1, 1))
+        yield param, mask

@@ -43,13 +43,45 @@ from beras.callbacks import VisualiseGAN, SaveModels
 def train_g64_d64():
     nb_units = 64
     generator_input_dim = 100
+    nb_real = 32
+    nb_fake = 96
+    lr = 0.0002
+    beta_1 = 0.5
+    nb_batches_per_epoch = 100
+    nb_epoch = 1000
+    output_dir = "models/dcgan_g64_d64_retry"
+    hdf5_fname = "/home/leon/data/tags_plain_t6.hdf5"
+
+    g = dcgan_generator(nb_units, generator_input_dim)
+    d = dcgan_discriminator(nb_units // 2)
+
+    gan = sequential_to_gan(g, d, nb_real, nb_fake)
+
+    save = SaveModels({"generator.hdf5": g, "discriminator.hdf5": d},
+                      output_dir=output_dir)
+    visual = VisualiseGAN(nb_samples=13**2, output_dir=output_dir,
+                          preprocess=lambda x: np.clip(x, 0, 1))
+
+    real_z_gen = zip_real_z(real_generator(hdf5_fname, nb_real),
+                            z_generator((nb_fake, generator_input_dim)))
+
+    history = train_dcgan(gan, Adam(lr, beta_1), Adam(lr, beta_1), real_z_gen,
+                          nb_batches_per_epoch=nb_batches_per_epoch,
+                          nb_epoch=nb_epoch, callbacks=[save, visual])
+    with open(os.path.join(output_dir, "history.json"), 'w+') as f:
+        json.dump(history.history, f)
+
+
+def train_g64_d64_dct():
+    nb_units = 64
+    generator_input_dim = 25
     nb_real = 64
     nb_fake = 96
     lr = 0.0002
     beta_1 = 0.5
     nb_batches_per_epoch = 100
     nb_epoch = 1000
-    output_dir = "models/dcgan_g64_d64"
+    output_dir = "models/dcgan_g64_d64_dct"
     hdf5_fname = "/home/leon/data/tags_plain_t6.hdf5"
 
     g = dcgan_generator(nb_units, generator_input_dim)
@@ -60,7 +92,7 @@ def train_g64_d64():
     save = SaveModels({"generator.hdf5": g, "discriminator.hdf5": d},
                       output_dir=output_dir)
     visual = VisualiseGAN(nb_samples=13**2, output_dir=output_dir,
-                          preprocess=lambda x: np.clip(x, 0, 1))
+                          preprocess=lambda x: np.clip(x, -1, 1))
 
     real_z_gen = zip_real_z(real_generator(hdf5_fname, nb_real),
                             z_generator((nb_fake, generator_input_dim)))
@@ -99,9 +131,9 @@ def train_g64_d64_fine_tune():
                       every_epoch=20,
                       output_dir=output_dir)
     visual = VisualiseGAN(nb_samples=13**2, output_dir=output_dir,
-                          preprocess=lambda x: np.clip(x, 0, 1))
+                          preprocess=lambda x: np.clip(x, -1, 1))
 
-    real_z_gen = zip_real_z(real_generator(hdf5_fname, nb_real),
+    real_z_gen = zip_real_z(real_generator(hdf5_fname, nb_real, range=(-1, 1)),
                             z_generator((nb_fake, generator_input_dim)))
 
     history = train_dcgan(gan, Adam(lr, beta_1), Adam(lr, beta_1), real_z_gen,
@@ -211,6 +243,7 @@ def train_g64_d64_pyramid_preprocess_2layer():
 
 def main():
     functions = [train_g64_d64, train_g64_d64_fine_tune,
+                 train_g64_d64_dct,
                  train_g64_d64_pyramid,
                  train_g64_d64_pyramid_preprocess_2layer]
 

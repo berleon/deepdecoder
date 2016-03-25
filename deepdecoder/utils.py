@@ -24,13 +24,6 @@ from beras.util import tile
 floatX = theano.config.floatX
 
 
-def np_binary_mask(mask, black=0., ignore=0.5,  white=1.):
-    bw = ignore * np.ones_like(mask, dtype=np.float32)
-    bw[mask > MASK["IGNORE"]] = white
-    bw[mask < MASK["BACKGROUND_RING"]] = black
-    return bw
-
-
 def binary_mask(mask, black=0., ignore=0.5,  white=1.):
     bw = ignore * T.ones_like(mask, dtype=floatX)
     bw = T.set_subtensor(bw[(mask > MASK["IGNORE"]).nonzero()], white)

@@ -142,55 +142,117 @@ class PyramidReduce(Layer):
 
     def get_output(self, train=False):
         x = self.get_input(train)
-        # map [0; 1] to [-1, 1]
-        return 2*pyramid_reduce(x) - 1
+        return pyramid_reduce(x)
+
+
+class GaussianBlur(Layer):
+    def __init__(self, sigma, **kwargs):
+        self.sigma = sigma
+        super().__init__(**kwargs)
+
+    def get_output(self, train=False):
+        X = self.get_input(train=train)
+        nb_channels = self.input_shape[1]
+        return smooth(X, self.sigma, nb_channels=nb_channels)
+
+
+class Selection(Layer):
+    def __init__(self, threshold,
+                 smooth_threshold,
+                 sigma=1,
+                 mode='lower',
+                 **kwargs):
+        assert mode == 'lower'
+        self.sigma = sigma
+        self.threshold = K.variable(threshold)
+        self.smooth_threshold = K.variable(smooth_threshold)
+        super().__init__(**kwargs)
+
+    def get_output(self, train=False):
+        X = self.get_input(train=train)
+        selection = K.cast(X < self.threshold, 'float32')
+        selection = smooth(selection, sigma=self.sigma)
+        selection = K.cast(selection > self.smooth_threshold,
+                           'float32')
+        selection = smooth(selection, sigma=2/3)
+        return selection
+
+
+class AddLighting(Layer):
+    def __init__(self, light_layer, scale=1, **kwargs):
+        self.light_layer = light_layer
+        self.scale = K.variable(scale)
+        super().__init__(**kwargs)
+
+    def get_output(self, train=False):
+        X = self.get_input(train=train)
+        light = self.light_layer.get_output(train=train)
+        return X*(1 + self.scale*light)
 
 
 class PyramidBlending(Layer):
-    def __init__(self, mask_layer, a_pyramid_layers=3, b_pyramid_layers=3,
-                 use_blending=None,
+    def __init__(self, mask_layer, selection_layer, input_pyramid_layers=3,
+                 mask_pyramid_layers=3, use_blending=None,
+                 min_mask_blendings=None,
                  **kwargs):
-        self.a_pyramid_layers = a_pyramid_layers
-        self.b_pyramid_layers = b_pyramid_layers
+
+        self.input_pyramid_layers = input_pyramid_layers
+        self.mask_pyramid_layers = mask_pyramid_layers
         self.mask_layer = mask_layer
-        self.max_pyramid_layers = max(a_pyramid_layers, b_pyramid_layers)
+        self.selection_layer = selection_layer
+        self.max_pyramid_layers = max(input_pyramid_layers,
+                                      mask_pyramid_layers)
         if use_blending is None:
             use_blending = K.variable(1)
         self.use_blending = use_blending
+        self.min_mask_blendings = []
+        for i in range(mask_pyramid_layers):
+            if min_mask_blendings is None:
+                value = 0
+            else:
+                value = min_mask_blendings[i]
+            self.min_mask_blendings.append(K.variable(value))
+
         self.weights = [K.variable(1)
                         for i in range(self.max_pyramid_layers)]
         super().__init__(**kwargs)
 
     def get_output(self, train=False):
-        def fill_none(lst):
-            return [None] * (self.max_pyramid_layers - len(lst)) + lst
+        def fill(lst, value=None):
+            return [value] * (self.max_pyramid_layers - len(lst)) + lst
 
-        a = self.get_input(train)
-        b = self.mask_layer.get_output(train)
-        mask = K.cast(b < -0.1, 'float32')
+        input = self.get_input(train)
+        mask = self.mask_layer.get_output(train)
+        selection = self.selection_layer.get_output(train)
 
-        gauss_pyr_a = list(pyramid_gaussian(a, self.a_pyramid_layers))
-        gauss_pyr_b = list(pyramid_gaussian(b, self.b_pyramid_layers))
-        gauss_pyr_mask = list(pyramid_gaussian(mask, self.b_pyramid_layers))
+        mask = 2*mask - 1
 
-        pyr_masks = [1]*(self.max_pyramid_layers - 1) + gauss_pyr_mask[-1:]
+        gauss_pyr_in = list(pyramid_gaussian(input, self.input_pyramid_layers))
+        gauss_pyr_mask = list(pyramid_gaussian(mask, self.mask_pyramid_layers))
+        gauss_pyr_select = list(pyramid_gaussian(selection,
+                                                 self.mask_pyramid_layers))
 
-        lap_pyr_a = fill_none(pyramid_laplace(gauss_pyr_a) + gauss_pyr_a[-1:])
-        lap_pyr_b = fill_none(pyramid_laplace(gauss_pyr_b) + gauss_pyr_b[-1:])
+        pyr_select = fill(gauss_pyr_select, value=1)
+
+        lap_pyr_in = fill(pyramid_laplace(gauss_pyr_in) + gauss_pyr_in[-1:])
+        lap_pyr_mask = fill(pyramid_laplace(gauss_pyr_mask) +
+                            gauss_pyr_mask[-1:])
+        min_mask_blendings = fill(self.min_mask_blendings, value=0)
 
         blend_pyr = []
-        for mask, lap_a, lap_b in zip(pyr_masks, lap_pyr_a, lap_pyr_b):
-            if lap_a is None:
-                lap_a = K.zeros_like(lap_b)
-            elif lap_b is None:
-                lap_b = K.zeros_like(lap_a)
-
-            blend = lap_a*mask + lap_b*(1 - mask)
+        for selection, lap_in, lap_mask, min_blending in \
+                zip(pyr_select, lap_pyr_in, lap_pyr_mask, min_mask_blendings):
+            if lap_in is None:
+                lap_in = K.zeros_like(lap_mask)
+            elif lap_mask is None:
+                lap_mask = K.zeros_like(lap_in)
+            selection = K.maximum(min_blending, selection)
+            blend = lap_in*selection + lap_mask*(1 - selection)
             blend_pyr.append(blend)
 
         img = None
         for i, (low, high) in enumerate(pairwise(reversed(blend_pyr))):
             if img is None:
-                img = low*self.weights[i]
-            img = upsample(img) + self.weights[i]*high
-        return ifelse(self.use_blending, img, a)
+                img = low*self.weights[0]
+            img = upsample(img) + self.weights[i+1]*high
+        return ifelse(self.use_blending, img, input)
