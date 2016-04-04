@@ -24,7 +24,7 @@ import pycuda.gpuarray as gpuarray
 import theano
 import theano.sandbox.cuda as thcu
 import theano.tensor as T
-from beras.util import smooth, sobel
+from beras.filters import gaussian_filter_2d, sobel
 from beesgrid import MASK, MASK_BLACK, MASK_WHITE
 from dotmap import DotMap
 from pycuda.compiler import SourceModule
@@ -291,7 +291,7 @@ def mask_loss_adaptive_mse(grid_idx, image, impl='auto'):
     bw = adaptive_mask(grid_idx, ignore=0.0,
                        black=black_mean.dimshuffle(*dimsuffle),
                        white=white_mean.dimshuffle(*dimsuffle))
-    # bw = smooth(bw, sigma=2.)
+    # bw = gaussian_filter_2d(bw, sigma=2.)
     diff = T.zeros_like(bw)
     idx = T.bitwise_and(T.neq(grid_idx, MASK["IGNORE"]),
                         T.neq(grid_idx, MASK["BACKGROUND_RING"]))
@@ -334,9 +334,9 @@ def mask_loss_sobel(grid_idx, image, impl='auto', diff_type='mse', scale=10.):
         return T.set_subtensor(x[indicies.nonzero()], 0)
 
     bw = binary_mask(grid_idx, ignore=0.5)
-    bw = smooth(bw, sigma=2.)
+    bw = gaussian_filter_2d(bw, sigma=2.)
     sobel_bw = sobel(bw)
-    sobel_img = [smooth(s, sigma=1.) for s in sobel(image)]
+    sobel_img = [gaussian_filter_2d(s, sigma=1.) for s in sobel(image)]
     sobel_bw = [norm_by_max(s) for s in sobel_bw]
     sobel_img = [norm_by_max(s) for s in sobel_img]
 
@@ -523,7 +523,7 @@ def pyramid_mse_image_loss(real_tag, reconstructed):
     gauss_pyr_real_tag = list(pyramid_gaussian(real_tag, max_layer))
     gauss_pyr_real_tag = list(pyramid_gaussian(real_tag, max_layer))
 
-    real_tag_down = smooth(gauss_pyr_real_tag[-1])
+    real_tag_down = gaussian_filter_2d(gauss_pyr_real_tag[-1])
     diff = selection*real_tag_down - selection*tag
 
     selection_sum = T.sum(selection, axis=(1, 2, 3))

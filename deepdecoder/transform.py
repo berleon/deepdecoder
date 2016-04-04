@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from beras.util import upsample, resize_interpolate, \
-    smooth
+from beras.util import get_output
+from beras.transform import upsample, resize_interpolate
+from beras.filters import gaussian_filter_2d_variable_sigma, \
+    gaussian_filter_2d, gaussian_kernel_default_radius
 from more_itertools import pairwise
 from keras.layers.core import Layer
 from deepdecoder.utils import binary_mask, adaptive_mask
@@ -34,7 +36,7 @@ def pyramid_expand(image, sigma=2/3):
 
 
 def pyramid_reduce(image, sigma=2/3):
-    return resize_interpolate(smooth(image, sigma), scale=2)
+    return resize_interpolate(gaussian_filter_2d(image, sigma), scale=2)
 
 
 def pyramid_gaussian(image, max_layer, sigma=2/3):
@@ -148,12 +150,23 @@ class PyramidReduce(Layer):
 class GaussianBlur(Layer):
     def __init__(self, sigma, **kwargs):
         self.sigma = sigma
+        self.fix_sigma = fix_sigma
+        if self.fix_sigma:
+            assert type(self.sigma) in (float, int)
+        self.window_radius = gaussian_kernel_default_radius(
+            sigma, window_radius)
         super().__init__(**kwargs)
 
     def get_output(self, train=False):
         X = self.get_input(train=train)
-        nb_channels = self.input_shape[1]
-        return smooth(X, self.sigma, nb_channels=nb_channels)
+        if self.fix_sigma:
+            return gaussian_filter_2d(X, self.sigma,
+                                      window_radius=self.window_radius)
+        else:
+            assert self.input_shape[1] == 1
+            sigmas = get_output(self.sigma, train, self.layer_cache)
+            return gaussian_filter_2d_variable_sigma(X, sigmas,
+                                                     self.window_radius)
 
 
 class Selection(Layer):
@@ -171,10 +184,10 @@ class Selection(Layer):
     def get_output(self, train=False):
         X = self.get_input(train=train)
         selection = K.cast(X < self.threshold, 'float32')
-        selection = smooth(selection, sigma=self.sigma)
+        selection = gaussian_filter_2d(selection, sigma=self.sigma)
         selection = K.cast(selection > self.smooth_threshold,
                            'float32')
-        selection = smooth(selection, sigma=2/3)
+        selection = gaussian_filter_2d(selection, sigma=2/3)
         return selection
 
 
