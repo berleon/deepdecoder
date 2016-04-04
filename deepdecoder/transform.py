@@ -97,7 +97,8 @@ class PyramidBlendingGridIdx(Layer):
         return (shp[0], 1) + shp[2:]
 
     def get_output(self, train=False):
-        tag_mean = self.tag_mean.get_output(train)
+        tag_mean = get_output(self.tag_mean, train,
+                              self.layer_cache)
         black_mean = tag_mean[:, 0]
         white_mean = K.abs(tag_mean[:, 1]) + black_mean + \
             self.min_black_white_distance
@@ -148,7 +149,7 @@ class PyramidReduce(Layer):
 
 
 class GaussianBlur(Layer):
-    def __init__(self, sigma, **kwargs):
+    def __init__(self, sigma, window_radius=None, fix_sigma=True, **kwargs):
         self.sigma = sigma
         self.fix_sigma = fix_sigma
         if self.fix_sigma:
@@ -167,6 +168,43 @@ class GaussianBlur(Layer):
             sigmas = get_output(self.sigma, train, self.layer_cache)
             return gaussian_filter_2d_variable_sigma(X, sigmas,
                                                      self.window_radius)
+
+
+class DifferenceOfGaussians(Layer):
+    def __init__(self, sigma1, sigma2, window_radius1=None,
+                 window_radius2=None,
+                 **kwargs):
+        self.sigma1 = sigma1
+        self.sigma2 = sigma2
+        self.window_radius1 = gaussian_kernel_default_radius(
+            sigma1, window_radius1)
+        self.window_radius2 = gaussian_kernel_default_radius(
+            sigma2, window_radius2)
+        super().__init__(**kwargs)
+
+    def get_output(self, train=False):
+        X = self.get_input(train=train)
+        g1 = gaussian_filter_2d(X, self.sigma1,
+                                window_radius=self.window_radius1)
+        g2 = gaussian_filter_2d(X, self.sigma2,
+                                window_radius=self.window_radius2)
+
+        return K.abs(g1 - g2)
+
+
+class UpsampleInterpolate(Layer):
+    def __init__(self, scale, **kwargs):
+        self.scale = scale
+        super().__init__(**kwargs)
+
+    @property
+    def output_shape(self):
+        bs, c, h, w = self.input_shape
+        return bs, c, int(h*self.scale), int(w*self.scale)
+
+    def get_output(self, train=False):
+        X = self.get_input(train=train)
+        return resize_interpolate(X, scale=1/self.scale)
 
 
 class Selection(Layer):
@@ -192,15 +230,35 @@ class Selection(Layer):
 
 
 class AddLighting(Layer):
-    def __init__(self, light_layer, scale=1, **kwargs):
-        self.light_layer = light_layer
-        self.scale = K.variable(scale)
+    def __init__(self, scale_layer, shift_layer, scale_factor=1,
+                 shift_factor=1, **kwargs):
+        self.scale_layer = scale_layer
+        self.shift_layer = shift_layer
+        self.scale_factor = K.variable(scale_factor)
+        self.shift_factor = K.variable(shift_factor)
         super().__init__(**kwargs)
 
+    def build(self):
+        scale_shape = self.scale_layer.output_shape
+        shift_shape = self.shift_layer.output_shape
+        assert scale_shape == self.input_shape, \
+            "Scale shape {} does not match input shape {}" \
+            .format(scale_shape, self.input_shape)
+        assert shift_shape == self.input_shape, \
+            "Shift shape {} does not match input shape {}" \
+            .format(shift_shape, self.input_shape)
+
     def get_output(self, train=False):
+        def norm_scale(x):
+            return (x + 1) / 2
         X = self.get_input(train=train)
-        light = self.light_layer.get_output(train=train)
-        return X*(1 + self.scale*light)
+        scale = get_output(self.scale_layer, train,
+                           self.layer_cache)
+        scale = norm_scale(scale)
+        shift = get_output(self.shift_layer, train,
+                           self.layer_cache)
+        return X*(1 - scale*self.scale_factor) + \
+            self.shift_factor*shift
 
 
 class PyramidBlending(Layer):
@@ -230,13 +288,18 @@ class PyramidBlending(Layer):
                         for i in range(self.max_pyramid_layers)]
         super().__init__(**kwargs)
 
+    def build(self):
+        assert self.mask_layer.output_shape == self.selection_layer.output_shape
+
     def get_output(self, train=False):
         def fill(lst, value=None):
             return [value] * (self.max_pyramid_layers - len(lst)) + lst
 
         input = self.get_input(train)
-        mask = self.mask_layer.get_output(train)
-        selection = self.selection_layer.get_output(train)
+        mask = get_output(self.mask_layer, train,
+                          self.layer_cache)
+        selection = get_output(self.selection_layer, train,
+                               self.layer_cache)
 
         mask = 2*mask - 1
 
