@@ -14,8 +14,7 @@
 #
 
 from beesgrid import GridGenerator, MaskGridArtist, generate_grids, \
-    NUM_MIDDLE_CELLS, CONFIG_ROTS, CONFIG_RADIUS, \
-    CONFIG_CENTER, TAG_SIZE
+    NUM_MIDDLE_CELLS
 
 from math import pi
 import numpy as np
@@ -23,14 +22,12 @@ import theano
 import itertools
 import h5py
 
-from deepdecoder.grid_curriculum import exam, grids_from_lecture, \
-    DISTRIBUTION_PARAMS, normalize
+from deepdecoder.grid_curriculum import exam, grids_from_lecture, normalize
 from beesgrid import MASK
 from beras.data_utils import HDF5Tensor
 from itertools import count
-from skimage.transform import pyramid_reduce, pyramid_laplacian, \
-    pyramid_expand, pyramid_gaussian
-from skimage.filters import gaussian_filter
+from skimage.transform import pyramid_reduce, \
+    pyramid_expand
 
 import scipy.ndimage.interpolation
 import scipy.ndimage
@@ -217,37 +214,32 @@ def resize_mask(masks, order=1, sigma=0.66):
     resized = []
     for mask in masks:
         smoothed = scipy.ndimage.gaussian_filter(mask[0], sigma=sigma)
-        small = scipy.ndimage.interpolation.zoom(smoothed, (0.5, 0.5), order=order)
+        small = scipy.ndimage.interpolation.zoom(smoothed, (0.5, 0.5),
+                                                 order=order)
         resized.append(small)
     return np.stack(resized).reshape((len(masks), 1, 32, 32))
 
 
-def param_mask_mean_generator(lecture, batch_size=128, ignore=-1):
-    def bit_mean_squash(bits, inflection=0.5, squash_factor=10):
-        def sigmoid(x):
-            return 1 / (1 + np.exp(-x))
-        return sigmoid(squash_factor*(bits - inflection))
+def param_mask_binary_generator(lecture, batch_size=128, ignore=-1):
+    white_ring = MASK_MEAN_PARTS.index(("INNER_WHITE_SEMICIRCLE",))
+    black_ring = MASK_MEAN_PARTS.index(("INNER_BLACK_SEMICIRCLE",))
+    outer_ring = MASK_MEAN_PARTS.index(("OUTER_WHITE_RING",))
+    bits = slice(2, 2+12)
+
+    def bit_binaries(bits):
+        bits[bits < 0.5] = 0
+        bits[bits >= 0.5] = 1
+        return bits
 
     for param, grid_idx in grids_lecture_generator(batch_size, lecture):
         means = np.random.uniform(0, 1, (len(param), len(MASK_MEAN_PARTS)))
         means[:, 0] = ignore
-        white_ring = MASK_MEAN_PARTS.index(("INNER_WHITE_SEMICIRCLE",))
-        black_ring = MASK_MEAN_PARTS.index(("INNER_BLACK_SEMICIRCLE",))
-        outer_ring = MASK_MEAN_PARTS.index(("OUTER_WHITE_RING",))
+
         mean_for_masks = means.copy()
-        min_black_white_dist = 0.20
-        black_shrink = 0.5
-
-        bits = slice(2, 2+12)
-        mean_for_masks[:, bits] = bit_mean_squash(mean_for_masks[:, bits])
-
-        mean_for_masks[:, outer_ring] = 0.66*mean_for_masks[:, outer_ring] + 0.34
-
-        mean_for_masks[:, black_ring] *= black_shrink
-        black = mean_for_masks[:, black_ring]
-
-        mean_for_masks[:, white_ring] = black + \
-            (1 - black) * mean_for_masks[:, white_ring] + min_black_white_dist
+        mean_for_masks[:, bits] = bit_binaries(mean_for_masks[:, bits])
+        mean_for_masks[:, outer_ring] = 1
+        mean_for_masks[:, white_ring] = 1
+        mean_for_masks[:, black_ring] = 0
 
         mask = np_mean_mask(grid_idx, mean_for_masks)
         means = 2*means - 1
