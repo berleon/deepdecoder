@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from conftest import plt_save_and_maybe_show, astronaut
+from conftest import plt_save_and_maybe_show
 from deepdecoder.transform import blend_pyramid, pyramid_reduce, \
     pyramid_gaussian
-
 
 import keras.backend as K
 import numpy as np
