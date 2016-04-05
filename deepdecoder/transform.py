@@ -140,8 +140,7 @@ class PyramidReduce(Layer):
         shp = input_shape
         return shp[:2] + (shp[2] // 2, shp[3] // 2)
 
-    def get_output(self, train=False):
-        x = self.get_input(train)
+    def call(self, x, mask=None):
         return pyramid_reduce(x)
 
 
@@ -204,6 +203,7 @@ class AddLighting(Layer):
         assert shift_shape == x_shape, \
             "Shift shape {} does not match input shape {}" \
             .format(shift_shape, x_shape)
+        return x_shape
 
     def call(self, inputs, mask=None):
         def norm_scale(a):
@@ -232,11 +232,12 @@ class PyramidBlending(Layer):
 
         def collect_weights(variable_weights, defaults):
             weights = []
-            for i, var_weight in enumerate(variable_mask_weights):
+            for i, var_weight in enumerate(variable_weights):
                 if var_weight is None:
                     weights.append(K.variable(defaults[i]))
                 else:
                     weights.append('variable')
+            return weights
 
         self.mask_weights = collect_weights(
             variable_mask_weights, [1, 1, 0])
@@ -247,26 +248,26 @@ class PyramidBlending(Layer):
     def get_output_shape_for(self, input_shapes):
         offset_shape, mask_shape, selection_shape = input_shapes[:3]
         assert mask_shape == selection_shape
-        assert offset_shape == mask_shape
         return offset_shape
 
     def call(self, inputs, mask=None):
         def collect_variable_weights_inputs(weights, start_idx):
             i = start_idx
             collect_weights = []
-            for wi, weight in enumerate(weights):
+            for weight in weights:
                 if weight == 'variable':
-                    collect_weights.append(inputs[i])
+                    collect_weights.append(
+                        inputs[i].dimshuffle(0, 1, 'x', 'x'))
                     i += 1
                 else:
-                    collect_weights.append(weight[wi])
+                    collect_weights.append(weight)
             return collect_weights
 
         def fill(lst, value=None):
             return [value] * (self.max_pyramid_layers - len(lst)) + lst
 
         nb_fix_inputs = 3
-        offset, mask, selection = inputs[nb_fix_inputs:]
+        offset, mask, selection = inputs[:nb_fix_inputs]
         mask = 2*mask - 1
 
         idx = nb_fix_inputs
@@ -305,5 +306,5 @@ class PyramidBlending(Layer):
         for i, (low, high) in enumerate(pairwise(reversed(blend_pyr))):
             if img is None:
                 img = low
-            img = upsample(img) + self.weights[i+1]*high
+            img = upsample(img) + high
         return img

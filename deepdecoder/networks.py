@@ -437,10 +437,7 @@ def get_lighting_generator(inputs, nb_units):
     return light_scale16, light_shift16, light_scale32, light_shift32
 
 
-def get_offset_merge_mask(inputs, nb_units, nb_conv_layers):
-    assert len(inputs) == 1
-    input = inputs[0]
-
+def get_offset_merge_mask(input, nb_units, nb_conv_layers):
     def conv_layers():
         return [
             Convolution2D(nb_units, 3, 3, border_mode='same'),
@@ -458,7 +455,6 @@ def mask_blending_generator(mask_driver, mask_generator,
                             nb_units=64,
                             nb_merge_conv_layers=0,
                             ):
-    assert len(mask_generator.input_shape) == 2
     n = nb_units
 
     def generator(inputs):
@@ -475,7 +471,7 @@ def mask_blending_generator(mask_driver, mask_generator,
 
         offset_front = get_offset_front([z], n)
         light_scale16, light_shift16, light_scale32, light_shift32 = \
-            get_lighting_generator([offset_front, light_mask16])
+            get_lighting_generator([offset_front, light_mask16], nb_units)
 
         offset_middle = get_offset_middle(
             [offset_front, offset_mask16, light_scale16, light_shift16], n)
@@ -483,19 +479,20 @@ def mask_blending_generator(mask_driver, mask_generator,
         mask_weight32 = get_mask_weight_blending(offset_middle)
 
         mask_selection = Selection(threshold=-0.03, smooth_threshold=0.08,
-                                   sigma=1.5)(mask_generator)
-
+                                   sigma=1.5)(mask)
         mask_with_lighting = AddLighting(scale_factor=0.75, shift_factor=1)(
-                [light_scale32, light_shift32, mask])
+                [mask, light_scale32, light_shift32])
 
         offset_mask_light32 = get_offset_merge_mask(
-            mask_down, n // 2, nb_merge_conv_layers)
+            mask_with_lighting, n // 2, nb_merge_conv_layers)
 
-        offset_back = get_offset_back([offset_middle, offset_mask_light32])
+        offset_back = get_offset_back(
+            [offset_middle, offset_mask_light32], nb_units)
 
-        blending = PyramidBlending(input_pyramid_layers=3,
-                                   mask_pyramid_layers=2)(
-                [mask_with_lighting, mask_selection, offset_back,
+        blending = PyramidBlending(offset_pyramid_layers=3,
+                                   mask_pyramid_layers=2,
+                                   variable_mask_weights=[None, True])(
+                [offset_back, mask_with_lighting, mask_selection,
                  mask_weight32])
         return LinearInBounds(-1, 1)(blending)
 
@@ -532,12 +529,6 @@ def deconv(model, nb_filter, h, w, activation='relu'):
         model.add(activation)
     else:
         model.add(Activation(activation))
-
-
-def up(size=(2, 2)):
-    def call(x):
-        return UpSampling2D(size)(x)
-    return cal
 
 
 def get_offset_generator(n=32, batch_input_shape=50, nb_output_channels=1,

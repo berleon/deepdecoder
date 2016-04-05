@@ -22,11 +22,7 @@ from keras.engine.topology import Input
 import keras.backend as K
 
 from beesgrid import TAG_SIZE
-from deepdecoder.networks import gan_with_z_rot90_grid_idx, dcgan_generator, \
-    mogan_learn_bw_grid, dcgan_discriminator, \
-    dcgan_small_generator, get_offset_merge_mask, get_mask_driver, \
-    get_offset_front, get_offset_middle, get_offset_back, \
-    get_mask_weight_blending, get_lighting_generator
+from deepdecoder.networks import *
 
 
 def test_networks_gan_with_z_rot90_grid_idx():
@@ -190,3 +186,16 @@ def test_mask_generator():
     x = np.random.sample(bs + shape)
     y = np.random.sample(bs + (1, 32, 32))
     model.train_on_batch(x, y)
+
+
+def test_mask_blending_generator():
+    driver = lambda z: get_mask_driver(z, nb_units=64)
+    mask_gen = lambda d: mask_generator(d, nb_units=64)
+    gen = mask_blending_generator(driver, mask_gen, nb_merge_conv_layers=1)
+    z = Input(shape=(20,), name='z')
+    fake = gen([z])
+    model = Model(z, fake)
+    model.compile('adam', 'mse')
+    z_in = np.random.sample((4, 20))
+    model.predict_on_batch(z_in)
+
