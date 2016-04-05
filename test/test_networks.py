@@ -178,3 +178,15 @@ def test_get_lighting_generator():
     y_shift32 = np.random.sample(bs + (1, 32, 32))
     model.train_on_batch([a, b, c],
                          [y_scale16, y_shift16, y_scale32, y_shift32])
+
+
+def test_mask_generator():
+    shape = (15, )
+    input = Input(shape=shape)
+    output = mask_generator([input])
+    model = Model(input, output)
+    model.compile('adam', 'mse')
+    bs = (64, )
+    x = np.random.sample(bs + shape)
+    y = np.random.sample(bs + (1, 32, 32))
+    model.train_on_batch(x, y)

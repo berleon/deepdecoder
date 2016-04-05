@@ -228,40 +228,34 @@ def mask_generator_with_conv(nb_units=64, input_dim=20, init=normal(0.02),
     return model
 
 
-def mask_generator(nb_units=64, input_dim=20, init=normal(0.02),
-                   dense_factor=3,
-                   nb_dense_layers=2):
+def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2):
     n = nb_units
 
     def conv(n):
-        model.add(Convolution2D(n, 3, 3, border_mode='same',
-                                init='he_normal'))
-        model.add(Activation('relu'))
+        def call(x):
+            conv = Convolution2D(n, 3, 3, border_mode='same',
+                                 init='he_normal')(x)
+            return Activation('relu')(conv)
+        return call
 
-    def up():
-        model.add(UpSampling2D())
-
-    model = Sequential()
-    model.add(Layer(input_shape=(input_dim,)))
-    for _ in range(nb_dense_layers):
-        model.add(Dense(dense_factor*nb_units, input_dim=input_dim,
-                        activation='relu'))
-
-    model.add(Dense(8*n*4*4, input_dim=input_dim))
-    model.add(Activation('relu'))
-    model.add(Reshape((8*n, 4, 4,)))
-    up()  # 8
-    conv(4*n)
-    conv(4*n)
-    up()  # 16
-    conv(2*n)
-    conv(2*n)
-    up()  # 32
-    conv(n)
-    model.add(Deconvolution2D(1, 3, 3, border_mode=(1, 1), init=init))
-
-    model.add(Activation('linear'))
-    return model
+    dense_layers = [
+        Dense(dense_factor*nb_units, activation='relu')
+        for _ in range(nb_dense_layers)]
+    return sequential(dense_layers + [
+        Dense(8*n*4*4),
+        Activation('relu'),
+        Reshape((8*n, 4, 4,)),
+        UpSampling2D(),  # 8x8
+        conv(4*n),
+        conv(4*n),
+        UpSampling2D(),  # 16x16
+        conv(2*n),
+        conv(2*n),
+        UpSampling2D(),  # 32x32
+        conv(n),
+        Deconvolution2D(1, 3, 3, border_mode=(1, 1)),
+        Activation('linear'),
+    ])(input)
 
 
 def dcgan_small_generator(nb_units=64, input_dim=20, init=normal(0.02),
