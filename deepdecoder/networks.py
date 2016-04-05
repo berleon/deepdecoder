@@ -450,12 +450,18 @@ def get_offset_merge_mask(input, nb_units, nb_conv_layers):
     return sequential(layers)(input)
 
 
-def mask_blending_generator(mask_driver, mask_generator,
-                            offset_inputs=['gen_driver'],
-                            nb_units=64,
-                            nb_merge_conv_layers=0,
-                            ):
-    n = nb_units
+def mask_blending_generator(
+        mask_driver,
+        mask_generator,
+        light_merge_mask16,
+        offset_merge_mask16,
+        offset_merge_mask32,
+        lighting_generator,
+        offset_front,
+        offset_middle,
+        offset_back,
+        mask_weight_blending,
+        ):
 
     def generator(inputs):
         z,  = inputs
@@ -463,36 +469,30 @@ def mask_blending_generator(mask_driver, mask_generator,
         mask = mask_generator(driver)
         mask_down = PyramidReduce()(mask)
 
-        offset_mask16 = get_offset_merge_mask(mask_down, n // 2,
-                                              nb_merge_conv_layers)
-
-        light_mask16 = get_offset_merge_mask(mask_down, n // 2,
-                                             nb_merge_conv_layers)
-
-        offset_front = get_offset_front([z], n)
+        offset_front_ = offset_front([z])
         light_scale16, light_shift16, light_scale32, light_shift32 = \
-            get_lighting_generator([offset_front, light_mask16], nb_units)
+            lighting_generator([offset_front_, light_merge_mask16(mask_down)])
 
-        offset_middle = get_offset_middle(
-            [offset_front, offset_mask16, light_scale16, light_shift16], n)
+        offset_middle_ = offset_middle(
+            [offset_front_, offset_merge_mask16(mask_down), light_scale16,
+             light_shift16])
 
-        mask_weight32 = get_mask_weight_blending(offset_middle)
+        mask_weight32 = mask_weight_blending(offset_middle_)
 
         mask_selection = Selection(threshold=-0.03, smooth_threshold=0.08,
                                    sigma=1.5)(mask)
         mask_with_lighting = AddLighting(scale_factor=0.75, shift_factor=1)(
                 [mask, light_scale32, light_shift32])
 
-        offset_mask_light32 = get_offset_merge_mask(
-            mask_with_lighting, n // 2, nb_merge_conv_layers)
+        offset_mask_light32 = offset_merge_mask32(mask_with_lighting)
 
-        offset_back = get_offset_back(
-            [offset_middle, offset_mask_light32], nb_units)
+        offset_back_ = offset_back(
+            [offset_middle_, offset_mask_light32])
 
         blending = PyramidBlending(offset_pyramid_layers=3,
                                    mask_pyramid_layers=2,
                                    variable_mask_weights=[None, True])(
-                [offset_back, mask_with_lighting, mask_selection,
+                [offset_back_, mask_with_lighting, mask_selection,
                  mask_weight32])
         return LinearInBounds(-1, 1)(blending)
 

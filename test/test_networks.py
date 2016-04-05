@@ -17,6 +17,7 @@ import pytest
 import numpy as np
 from keras.models import Sequential, Model
 from keras.layers.core import Dense, Flatten, Reshape
+from keras.layers.convolutional import Convolution2D, UpSampling2D
 from keras.optimizers import Adam
 from keras.engine.topology import Input
 import keras.backend as K
@@ -189,9 +190,63 @@ def test_mask_generator():
 
 
 def test_mask_blending_generator():
-    driver = lambda z: get_mask_driver(z, nb_units=64)
-    mask_gen = lambda d: mask_generator(d, nb_units=64)
-    gen = mask_blending_generator(driver, mask_gen, nb_merge_conv_layers=1)
+    def driver(z):
+        return sequential([
+            Dense(16),
+        ])(z)
+
+    def mask_generator(x):
+        return sequential([
+            Dense(16),
+            Reshape((1, 4, 4)),
+            UpSampling2D((8, 8))
+        ])(x)
+
+    def merge_mask(x):
+        return sequential([
+            Convolution2D(1, 3, 3, border_mode='same')
+        ])(x)
+
+    def light_generator(ins):
+        seq = sequential([
+            Convolution2D(1, 3, 3, border_mode='same')
+        ])(concat(ins))
+        return seq, seq, UpSampling2D()(seq), UpSampling2D()(seq),
+
+    def offset_front(x):
+        return sequential([
+            Dense(16),
+            Reshape((1, 4, 4)),
+            UpSampling2D((4, 4))
+        ])(x)
+
+    def offset_middle(x):
+        return UpSampling2D()(concat(x))
+
+    def offset_back(x):
+        return sequential([
+            UpSampling2D(),
+            Convolution2D(1, 3, 3, border_mode='same')
+        ])(concat(x))
+
+    def mask_weight_blending(x):
+        return sequential([
+            Flatten(),
+            Dense(1),
+        ])(x)
+
+    gen = mask_blending_generator(
+        mask_driver=driver,
+        mask_generator=mask_generator,
+        light_merge_mask16=merge_mask,
+        offset_merge_mask16=merge_mask,
+        offset_merge_mask32=merge_mask,
+        lighting_generator=light_generator,
+        offset_front=offset_front,
+        offset_middle=offset_middle,
+        offset_back=offset_back,
+        mask_weight_blending=mask_weight_blending)
+
     z = Input(shape=(20,), name='z')
     fake = gen([z])
     model = Model(z, fake)
