@@ -12,15 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from beras.util import get_output
 from beras.transform import upsample, resize_interpolate
-from beras.filters import gaussian_filter_2d_variable_sigma, \
-    gaussian_filter_2d, gaussian_kernel_default_radius
+from beras.filters import gaussian_filter_2d, gaussian_kernel_default_radius
 from more_itertools import pairwise
 from keras.layers.core import Layer
 from deepdecoder.utils import binary_mask, adaptive_mask
 import keras.backend as K
-from theano.ifelse import ifelse
 
 
 def pyramid_expand(image, sigma=2/3):
@@ -87,6 +84,7 @@ def blend_pyramid(a, b, mask, num_layers=None, weights=None):
 
 class PyramidBlendingGridIdx(Layer):
     def __init__(self, tag_mean, **kwargs):
+        raise Exception("Not updated to the new keras synatx")
         self.tag_mean = tag_mean
         self.min_black_white_distance = 0.05
         super().__init__(**kwargs)
@@ -138,9 +136,8 @@ class PyramidBlendingGridIdx(Layer):
 
 
 class PyramidReduce(Layer):
-    @property
-    def output_shape(self):
-        shp = self.input_shape
+    def get_output_shape_for(self, input_shape):
+        shp = input_shape
         return shp[:2] + (shp[2] // 2, shp[3] // 2)
 
     def get_output(self, train=False):
@@ -149,47 +146,15 @@ class PyramidReduce(Layer):
 
 
 class GaussianBlur(Layer):
-    def __init__(self, sigma, window_radius=None, fix_sigma=True, **kwargs):
+    def __init__(self, sigma, window_radius=None, **kwargs):
         self.sigma = sigma
-        self.fix_sigma = fix_sigma
-        if self.fix_sigma:
-            assert type(self.sigma) in (float, int)
         self.window_radius = gaussian_kernel_default_radius(
             sigma, window_radius)
         super().__init__(**kwargs)
 
-    def get_output(self, train=False):
-        X = self.get_input(train=train)
-        if self.fix_sigma:
-            return gaussian_filter_2d(X, self.sigma,
-                                      window_radius=self.window_radius)
-        else:
-            assert self.input_shape[1] == 1
-            sigmas = get_output(self.sigma, train, self.layer_cache)
-            return gaussian_filter_2d_variable_sigma(X, sigmas,
-                                                     self.window_radius)
-
-
-class DifferenceOfGaussians(Layer):
-    def __init__(self, sigma1, sigma2, window_radius1=None,
-                 window_radius2=None,
-                 **kwargs):
-        self.sigma1 = sigma1
-        self.sigma2 = sigma2
-        self.window_radius1 = gaussian_kernel_default_radius(
-            sigma1, window_radius1)
-        self.window_radius2 = gaussian_kernel_default_radius(
-            sigma2, window_radius2)
-        super().__init__(**kwargs)
-
-    def get_output(self, train=False):
-        X = self.get_input(train=train)
-        g1 = gaussian_filter_2d(X, self.sigma1,
-                                window_radius=self.window_radius1)
-        g2 = gaussian_filter_2d(X, self.sigma2,
-                                window_radius=self.window_radius2)
-
-        return K.abs(g1 - g2)
+    def call(self, x, mask=None):
+        return gaussian_filter_2d(x, self.sigma,
+                                  window_radius=self.window_radius)
 
 
 class UpsampleInterpolate(Layer):
@@ -197,31 +162,26 @@ class UpsampleInterpolate(Layer):
         self.scale = scale
         super().__init__(**kwargs)
 
-    @property
-    def output_shape(self):
-        bs, c, h, w = self.input_shape
+    def get_output_shape_for(self, input_shape):
+        bs, c, h, w = input_shape
         return bs, c, int(h*self.scale), int(w*self.scale)
 
-    def get_output(self, train=False):
-        X = self.get_input(train=train)
-        return resize_interpolate(X, scale=1/self.scale)
+    def call(self, x, mask=None):
+        return resize_interpolate(x, scale=1/self.scale)
 
 
 class Selection(Layer):
     def __init__(self, threshold,
                  smooth_threshold,
                  sigma=1,
-                 mode='lower',
                  **kwargs):
-        assert mode == 'lower'
         self.sigma = sigma
         self.threshold = K.variable(threshold)
         self.smooth_threshold = K.variable(smooth_threshold)
         super().__init__(**kwargs)
 
-    def get_output(self, train=False):
-        X = self.get_input(train=train)
-        selection = K.cast(X < self.threshold, 'float32')
+    def call(self, x, mask=None):
+        selection = K.cast(x < self.threshold, 'float32')
         selection = gaussian_filter_2d(selection, sigma=self.sigma)
         selection = K.cast(selection > self.smooth_threshold,
                            'float32')
@@ -230,105 +190,120 @@ class Selection(Layer):
 
 
 class AddLighting(Layer):
-    def __init__(self, scale_layer, shift_layer, scale_factor=1,
+    def __init__(self, scale_factor=1,
                  shift_factor=1, **kwargs):
-        self.scale_layer = scale_layer
-        self.shift_layer = shift_layer
         self.scale_factor = K.variable(scale_factor)
         self.shift_factor = K.variable(shift_factor)
         super().__init__(**kwargs)
 
-    def build(self):
-        scale_shape = self.scale_layer.output_shape
-        shift_shape = self.shift_layer.output_shape
-        assert scale_shape == self.input_shape, \
+    def get_output_shape_for(self, input_shape):
+        x_shape, scale_shape, shift_shape = input_shape
+        assert scale_shape == x_shape, \
             "Scale shape {} does not match input shape {}" \
-            .format(scale_shape, self.input_shape)
-        assert shift_shape == self.input_shape, \
+            .format(scale_shape, x_shape)
+        assert shift_shape == x_shape, \
             "Shift shape {} does not match input shape {}" \
-            .format(shift_shape, self.input_shape)
+            .format(shift_shape, x_shape)
 
-    def get_output(self, train=False):
-        def norm_scale(x):
-            return (x + 1) / 2
-        X = self.get_input(train=train)
-        scale = get_output(self.scale_layer, train,
-                           self.layer_cache)
+    def call(self, inputs, mask=None):
+        def norm_scale(a):
+            return (a + 1) / 2
+        x, scale, shift = inputs
         scale = norm_scale(scale)
-        shift = get_output(self.shift_layer, train,
-                           self.layer_cache)
-        return X*(1 - scale*self.scale_factor) + \
-            self.shift_factor*shift
+        return x*(1 - scale*self.scale_factor) + self.shift_factor*shift
 
 
 class PyramidBlending(Layer):
-    def __init__(self, mask_layer, selection_layer, input_pyramid_layers=3,
-                 mask_pyramid_layers=3, use_blending=None,
-                 min_mask_blendings=None,
+    def __init__(self, offset_pyramid_layers=3,
+                 mask_pyramid_layers=3,
+                 variable_offset_weights=None,
+                 variable_mask_weights=None,
                  **kwargs):
 
-        self.input_pyramid_layers = input_pyramid_layers
+        self.offset_pyramid_layers = offset_pyramid_layers
         self.mask_pyramid_layers = mask_pyramid_layers
-        self.mask_layer = mask_layer
-        self.selection_layer = selection_layer
-        self.max_pyramid_layers = max(input_pyramid_layers,
+        self.max_pyramid_layers = max(offset_pyramid_layers,
                                       mask_pyramid_layers)
-        if use_blending is None:
-            use_blending = K.variable(1)
-        self.use_blending = use_blending
-        self.min_mask_blendings = []
-        for i in range(mask_pyramid_layers):
-            if min_mask_blendings is None:
-                value = 0
-            else:
-                value = min_mask_blendings[i]
-            self.min_mask_blendings.append(K.variable(value))
 
-        self.weights = [K.variable(1)
-                        for i in range(self.max_pyramid_layers)]
+        if variable_offset_weights is None:
+            variable_offset_weights = [None] * self.offset_pyramid_layers
+        if variable_mask_weights is None:
+            variable_mask_weights = [None] * self.mask_pyramid_layers
+
+        def collect_weights(variable_weights, defaults):
+            weights = []
+            for i, var_weight in enumerate(variable_mask_weights):
+                if var_weight is None:
+                    weights.append(K.variable(defaults[i]))
+                else:
+                    weights.append('variable')
+
+        self.mask_weights = collect_weights(
+            variable_mask_weights, [1, 1, 0])
+        self.offset_weights = collect_weights(
+            variable_offset_weights, [0, 0, 1])
         super().__init__(**kwargs)
 
-    def build(self):
-        assert self.mask_layer.output_shape == self.selection_layer.output_shape
+    def get_output_shape_for(self, input_shapes):
+        offset_shape, mask_shape, selection_shape = input_shapes[:3]
+        assert mask_shape == selection_shape
+        assert offset_shape == mask_shape
+        return offset_shape
 
-    def get_output(self, train=False):
+    def call(self, inputs, mask=None):
+        def collect_variable_weights_inputs(weights, start_idx):
+            i = start_idx
+            collect_weights = []
+            for wi, weight in enumerate(weights):
+                if weight == 'variable':
+                    collect_weights.append(inputs[i])
+                    i += 1
+                else:
+                    collect_weights.append(weight[wi])
+            return collect_weights
+
         def fill(lst, value=None):
             return [value] * (self.max_pyramid_layers - len(lst)) + lst
 
-        input = self.get_input(train)
-        mask = get_output(self.mask_layer, train,
-                          self.layer_cache)
-        selection = get_output(self.selection_layer, train,
-                               self.layer_cache)
-
+        nb_fix_inputs = 3
+        offset, mask, selection = inputs[nb_fix_inputs:]
         mask = 2*mask - 1
 
-        gauss_pyr_in = list(pyramid_gaussian(input, self.input_pyramid_layers))
+        idx = nb_fix_inputs
+        nb_variable_offsets = len([w for w in self.offset_weights
+                                   if w is 'variable'])
+        offset_weights = collect_variable_weights_inputs(
+            self.offset_weights, idx)
+        mask_weights = collect_variable_weights_inputs(
+            self.mask_weights, idx + nb_variable_offsets)
+
+        gauss_pyr_in = list(pyramid_gaussian(
+            offset, self.offset_pyramid_layers))
         gauss_pyr_mask = list(pyramid_gaussian(mask, self.mask_pyramid_layers))
-        gauss_pyr_select = list(pyramid_gaussian(selection,
-                                                 self.mask_pyramid_layers))
+        gauss_pyr_select = list(pyramid_gaussian(
+            selection, self.mask_pyramid_layers))
 
         pyr_select = fill(gauss_pyr_select, value=1)
 
         lap_pyr_in = fill(pyramid_laplace(gauss_pyr_in) + gauss_pyr_in[-1:])
         lap_pyr_mask = fill(pyramid_laplace(gauss_pyr_mask) +
                             gauss_pyr_mask[-1:])
-        min_mask_blendings = fill(self.min_mask_blendings, value=0)
 
         blend_pyr = []
-        for selection, lap_in, lap_mask, min_blending in \
-                zip(pyr_select, lap_pyr_in, lap_pyr_mask, min_mask_blendings):
+        for selection, lap_in, lap_mask, offset_weight, mask_weight in \
+                zip(pyr_select, lap_pyr_in, lap_pyr_mask,
+                    offset_weights, mask_weights):
             if lap_in is None:
                 lap_in = K.zeros_like(lap_mask)
             elif lap_mask is None:
                 lap_mask = K.zeros_like(lap_in)
-            selection = K.maximum(min_blending, selection)
-            blend = lap_in*selection + lap_mask*(1 - selection)
+            blend = lap_in*selection*offset_weight + \
+                lap_mask*(1 - selection)*mask_weight
             blend_pyr.append(blend)
 
         img = None
         for i, (low, high) in enumerate(pairwise(reversed(blend_pyr))):
             if img is None:
-                img = low*self.weights[0]
+                img = low
             img = upsample(img) + self.weights[i+1]*high
-        return ifelse(self.use_blending, img, input)
+        return img
