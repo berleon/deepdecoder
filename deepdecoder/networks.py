@@ -365,102 +365,107 @@ def get_mask_driver(x):
     return driver(x)
 
 
+def get_offset_front(inputs, nb_units):
+    n = nb_units
+    input = concat(inputs)
+
+    return sequential([
+        Dense(8*n*4*4),
+        BatchNormalization(),
+        Activation('relu'),
+        Reshape((8*n, 4, 4)),
+        UpSampling2D(),  # 8x8
+        conv(4*n, 3, 3),
+        UpSampling2D(),  # 16x16
+        conv(2*n, 3, 3),
+    ])(input)
+
+
+def get_offset_middle(inputs, nb_units):
+    n = nb_units
+    input = concat(inputs)
+    return sequential([
+        UpSampling2D(),  # 32x32
+        conv(2*n, 3, 3),
+        conv(2*n, 3, 3),
+    ])(input)
+
+
+def get_offset_back(inputs, nb_units):
+    n = nb_units
+    input = concat(inputs)
+    return sequential([
+        UpSampling2D(),  # 64x64
+        conv(n, 3, 3),
+        Deconvolution2D(1, 3, 3, border_mode=(1, 1)),
+        LinearInBounds(-1, 1, clip=True),
+    ])(input)
+
+
+def get_mask_weight_blending(inputs):
+    input = concat(inputs)
+    return sequential([
+        Convolution2D(1, 3, 3),
+        Flatten(),
+        Dense(1),
+        LinearInBounds(0.1, 4, clip=True),
+    ])(input)
+
+
+def get_lighting_generator(inputs, nb_units):
+    # front_back_ins = ['gen_light_merge16_mask']
+    n = nb_units
+    light_conv = sequential([
+        conv(n, 3, 3),
+        Convolution2D(2, 1, 1, border_mode='same'),
+        LinearInBounds(-1, 1, clip=True),
+    ])
+
+    shift_split = Split(0, 1, axis=1)(light_conv)
+    light_shift16 = GaussianBlur(sigma=2)(shift_split)
+    light_shift32 = sequential([
+        UpSampling2D(),
+        GaussianBlur(sigma=8),
+    ])(light_shift16)
+
+    scale_split = Split(1, 2, axis=1)(light_conv)
+    light_scale16 = GaussianBlur(sigma=2)(scale_split)
+
+    light_scale32 = sequential([
+        UpSampling2D(),
+        GaussianBlur(sigma=6),
+    ])(light_scale16)
+
+    # TODO:
+    # dog = DifferenceOfGaussians(2, 6, window_radius2=10)
+    # sum_below = SumBelow(1)
+    # dog.regularizers = [sum_below]
+    # sum_below.set_layer(dog)
+    return light_scale16, light_shift16, light_scale32, light_shift32
+
+
+def get_offset_merge_mask(inputs, nb_units, nb_conv_layers):
+    assert len(inputs) == 1
+    input = inputs[0]
+
+    def conv_layers():
+        return [
+            Convolution2D(nb_units, 3, 3, border_mode='same'),
+            BatchNormalization(axis=1),
+            Activation('relu'),
+        ]
+    layers = [Layer()]
+    for i in range(nb_conv_layers):
+        layers.extends(conv_layers())
+    return sequential(layers)(input)
+
+
 def mask_blending_generator(mask_driver, mask_generator,
                             offset_inputs=['gen_driver'],
                             nb_units=64,
                             nb_merge_conv_layers=0,
                             ):
     assert len(mask_generator.input_shape) == 2
-
-    def get_offset_front(inputs, nb_units):
-        n = nb_units
-        input = concat(inputs)
-
-        return sequential([
-            Dense(8*n*4*4),
-            BatchNormalization(),
-            Activation('relu'),
-            Reshape((8*n, 4, 4)),
-            UpSampling2D(),  # 8x8
-            conv(4*n, 3, 3),
-            UpSampling2D(),  # 16x16
-            conv(2*n, 3, 3),
-        ])(input)
-
-    def get_offset_middle(inputs, nb_units):
-        n = nb_units
-        input = concat(inputs)
-        return sequential([
-            UpSampling2D(),  # 32x32
-            conv(2*n, 3, 3),
-            conv(2*n, 3, 3),
-        ])(input)
-
-    def get_offset_back(inputs, nb_units):
-        n = nb_units
-        input = concat(inputs)
-        return sequential([
-            UpSampling2D(),  # 64x64
-            conv(n, 3, 3),
-            Deconvolution2D(1, 3, 3, border_mode=(1, 1)),
-            LinearInBounds(-1, 1, clip=True),
-        ])(input)
-
-    def get_mask_weight_blending(inputs):
-        input = concat(inputs)
-        return sequential([
-            Convolution2D(1, 3, 3),
-            Flatten(),
-            Dense(1),
-            LinearInBounds(0.1, 4, clip=True),
-        ])(input)
-
-    def get_lighting_generator(inputs, nb_units):
-        # front_back_ins = ['gen_light_merge16_mask']
-        n = nb_units
-        light_conv = sequential([
-            conv(n, 3, 3),
-            Convolution2D(2, 1, 1, border_mode='same'),
-            LinearInBounds(-1, 1, clip=True),
-        ])
-
-        shift_split = Split(0, 1, axis=1)(light_conv)
-        light_shift16 = GaussianBlur(sigma=2)(shift_split)
-        light_shift32 = sequential([
-            UpSampling2D(),
-            GaussianBlur(sigma=8),
-        ])(light_shift16)
-
-        scale_split = Split(1, 2, axis=1)(light_conv)
-        light_scale16 = GaussianBlur(sigma=2)(scale_split)
-
-        light_scale32 = sequential([
-            UpSampling2D(),
-            GaussianBlur(sigma=6),
-        ])(light_scale16)
-
-        # TODO:
-        # dog = DifferenceOfGaussians(2, 6, window_radius2=10)
-        # sum_below = SumBelow(1)
-        # dog.regularizers = [sum_below]
-        # sum_below.set_layer(dog)
-        return light_scale16, light_shift16, light_scale32, light_shift32
-
-    def get_offset_merge_mask(inputs, nb_units, nb_conv_layers):
-        assert len(inputs) == 1
-        input = inputs[0]
-
-        def conv_layers():
-            return [
-                Convolution2D(nb_units, 3, 3, border_mode='same'),
-                BatchNormalization(axis=1),
-                Activation('relu'),
-            ]
-        layers = [Layer()]
-        for i in range(nb_conv_layers):
-            layers.extends(conv_layers())
-        return sequential(layers)(input)
-
     n = nb_units
 
     def generator(inputs):
