@@ -28,23 +28,21 @@ from keras.layers.noise import GaussianNoise
 from keras.engine.topology import merge
 import keras.backend as K
 
-from beras.layers.attention import RotationTransformer, GraphSpatialTransformer
-from beras.layers.transform import iDCT
-from beras.gan import GAN, add_gan_outputs
+from beras.layers.attention import RotationTransformer
+from beras.gan import GAN, gan_outputs
 from beras.util import sequential, concat
 from beras.regularizers import ActivityInBoundsRegularizer, SumBelow
 from beras.layers.core import Split, ZeroGradient, LinearInBounds
 
 from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE
 
-from deepdecoder.deconv import Deconvolution2D, Deconv2DVariableWeights
+from deepdecoder.deconv import Deconvolution2D
 from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
 from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
 from deepdecoder.data import nb_normalized_params
 from deepdecoder.mask_loss import pyramid_loss
 from deepdecoder.transform import PyramidBlending, PyramidReduce, \
-    AddLighting, Selection, GaussianBlur, UpsampleInterpolate, \
-    DifferenceOfGaussians
+    AddLighting, Selection, GaussianBlur, UpsampleInterpolate
 
 
 def get_decoder_model(nb_output=NUM_MIDDLE_CELLS, inputs=['input'],
@@ -351,13 +349,14 @@ def autoencoder_with_mask_loss(encoder, decoder, batch_size=128):
     return encoder
 
 
-def get_mask_driver(x):
+def get_mask_driver(x, nb_units):
+    n = nb_units
     driver = sequential([
-        Dense(64),
+        Dense(n),
         BatchNormalization(),
         Dropout(0.25),
         Activation('relu'),
-        Dense(64),
+        Dense(n),
         BatchNormalization(),
         Dropout(0.25),
         Activation('relu'),
@@ -413,13 +412,13 @@ def get_mask_weight_blending(inputs):
 
 
 def get_lighting_generator(inputs, nb_units):
-    # front_back_ins = ['gen_light_merge16_mask']
     n = nb_units
+    input = concat(inputs)
     light_conv = sequential([
         conv(n, 3, 3),
         Convolution2D(2, 1, 1, border_mode='same'),
         LinearInBounds(-1, 1, clip=True),
-    ])
+    ])(input)
 
     shift_split = Split(0, 1, axis=1)(light_conv)
     light_shift16 = GaussianBlur(sigma=2)(shift_split)
@@ -454,9 +453,9 @@ def get_offset_merge_mask(inputs, nb_units, nb_conv_layers):
             BatchNormalization(axis=1),
             Activation('relu'),
         ]
-    layers = [Layer()]
+    layers = []
     for i in range(nb_conv_layers):
-        layers.extends(conv_layers())
+        layers.extend(conv_layers())
     return sequential(layers)(input)
 
 
@@ -679,7 +678,7 @@ def mask_blending_gan(offset_generator, mask_generator, discriminator,
     g.add_input(GAN.real_name, batch_input_shape=real_shape)
     g.add_node(discriminator, "discriminator",
                inputs=[GAN.generator_name, "real"], concat_axis=0)
-    add_gan_outputs(g, fake_for_gen=(0, nb_fake),
+    gan_outputs(g, fake_for_gen=(0, nb_fake),
                     fake_for_dis=(nb_fake//2, nb_fake),
                     real=(nb_fake, nb_fake+nb_real))
     return g
@@ -725,7 +724,7 @@ def mask_blending_gan_new(offset_generator, mask_generator, discriminator,
     g.add_input(GAN.real_name, batch_input_shape=real_shape)
     g.add_node(discriminator, "discriminator",
                inputs=[GAN.generator_name, "real"], concat_axis=0)
-    add_gan_outputs(g, fake_for_gen=(0, nb_fake - nb_real),
+    gan_outputs(g, fake_for_gen=(0, nb_fake - nb_real),
                     fake_for_dis=(nb_fake - nb_real, nb_fake),
                     real=(nb_fake, nb_fake+nb_real))
     return g
