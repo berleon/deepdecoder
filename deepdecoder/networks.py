@@ -639,6 +639,25 @@ def dcgan_generator_conv(n=32, input_dim=50, nb_output_channels=1,
     return model
 
 
+def mask_blending_discriminator(x, n=32, out_activation='sigmoid'):
+    def conv(n):
+        return [
+            Convolution2D(n, 5, 5, subsample=(2, 2), border_mode='same'),
+            BatchNormalization(),
+            LeakyReLU(0.2),
+        ]
+
+    return sequential([
+        Convolution2D(n, 5, 5, subsample=(2, 2), border_mode='same'),
+        LeakyReLU(0.2),
+        conv(2*n),
+        conv(4*n),
+        conv(8*n),
+        Flatten(),
+        Dense(1, activation=out_activation)
+    ], ns='dis')(concat(x, axis=0))
+
+
 def mask_blending_gan(offset_generator, mask_generator, discriminator,
                       nb_fake=64, nb_real=32):
     assert len(mask_generator.input_shape) == 2

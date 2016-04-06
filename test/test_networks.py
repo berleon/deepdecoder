@@ -12,57 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from conftest import on_gpu
-import pytest
 import numpy as np
-from keras.models import Sequential, Model
+from keras.models import Model
 from keras.layers.core import Dense, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D, UpSampling2D
-from keras.optimizers import Adam
 from keras.engine.topology import Input
-import keras.backend as K
 
-from beesgrid import TAG_SIZE
 from deepdecoder.networks import *
-
-
-def test_networks_gan_with_z_rot90_grid_idx():
-    n = TAG_SIZE*TAG_SIZE
-    nb_z = 20
-    generator = Sequential()
-    generator.add(Dense(n, input_dim=nb_z+NB_GAN_GRID_PARAMS))
-    generator.add(Reshape((1, TAG_SIZE, TAG_SIZE)))
-
-    discriminator = Sequential()
-    discriminator.add(Flatten(input_shape=(1, TAG_SIZE, TAG_SIZE)))
-    discriminator.add(Dense(1, input_dim=n))
-
-    gan = gan_with_z_rot90_grid_idx(generator, discriminator, nb_z=nb_z,
-                                    reconstruct_fn=add_diff_rot90)
-    gan.compile(Adam(), Adam())
-    batch = next(gen_diff_gan(gan.batch_size * 10))
-    gan.fit(batch.grid_bw, {'grid_idx': batch.grid_idx,
-                            'z_rot90': batch.z_bins,
-                            'grid_params': batch.params},
-            nb_epoch=1, verbose=1)
-
-
-@pytest.mark.skipif(not on_gpu(), reason="only works with cuda")
-def test_mogan_learn_bw_grid():
-    gan, _ = mogan_learn_bw_grid(dcgan_generator, dcgan_discriminator)
-    gan.compile()
-
-
-def test_autoencoder_mask_generator_loading(tmpdir):
-    nb_input = 21
-    g = dcgan_small_generator(input_dim=nb_input, nb_output_channels=2)
-    fname = str(tmpdir) + "/g.hdf5"
-    g.save_weights(fname)
-
-    g_load = dcgan_small_generator(input_dim=nb_input, nb_output_channels=2)
-    g_load.load_weights(fname)
-    for a, b in zip(g.trainable_weights, g_load.trainable_weights):
-        assert (K.get_value(a) == K.get_value(b)).all()
 
 
 def test_get_offset_merge_mask():
@@ -189,6 +145,20 @@ def test_mask_generator():
     model.train_on_batch(x, y)
 
 
+def test_mask_blending_discriminator():
+    fake_shape = (5, 1, 64, 64)
+    real_shape = (10, 1, 64, 64)
+    fake = Input(batch_shape=fake_shape)
+    real = Input(batch_shape=real_shape)
+    output = mask_blending_discriminator([fake, real])
+    model = Model([fake, real], output)
+    model.compile('adam', 'mse')
+    f = np.random.sample(fake_shape)
+    r = np.random.sample(real_shape)
+    y = np.random.sample((fake_shape[0] + real_shape[1], 1,))
+    model.train_on_batch([f, r], y)
+
+
 def test_mask_blending_generator():
     def driver(z):
         return sequential([
@@ -253,4 +223,3 @@ def test_mask_blending_generator():
     model.compile('adam', 'mse')
     z_in = np.random.sample((4, 20))
     model.predict_on_batch(z_in)
-
