@@ -30,7 +30,8 @@ import keras.backend as K
 
 from beras.layers.attention import RotationTransformer
 from beras.gan import GAN, gan_outputs
-from beras.util import sequential, concat, collect_layers, load_weights
+from beras.util import sequential, concat, collect_layers, load_weights, \
+    namespace
 from beras.regularizers import ActivityInBoundsRegularizer, SumBelow
 from beras.layers.core import Split, ZeroGradient, LinearInBounds
 
@@ -356,7 +357,7 @@ def get_mask_driver(x, nb_units, nb_output_units):
         Activation('relu'),
         Dense(nb_output_units),
         BatchNormalization(),
-    ])
+    ], ns='driver')
     return driver(x)
 
 
@@ -373,7 +374,7 @@ def get_offset_front(inputs, nb_units):
         conv(4*n, 3, 3),
         UpSampling2D(),  # 16x16
         conv(2*n, 3, 3),
-    ])(input)
+    ], ns='offset.front')(input)
 
 
 def get_offset_middle(inputs, nb_units):
@@ -383,7 +384,7 @@ def get_offset_middle(inputs, nb_units):
         UpSampling2D(),  # 32x32
         conv(2*n, 3, 3),
         conv(2*n, 3, 3),
-    ])(input)
+    ], ns='offset.middle')(input)
 
 
 def get_offset_back(inputs, nb_units):
@@ -394,7 +395,7 @@ def get_offset_back(inputs, nb_units):
         conv(n, 3, 3),
         Convolution2D(1, 3, 3, border_mode='same'),
         LinearInBounds(-1, 1, clip=True),
-    ])(input)
+    ], ns='offset.back')(input)
 
 
 def get_mask_weight_blending(inputs):
@@ -404,7 +405,7 @@ def get_mask_weight_blending(inputs):
         Flatten(),
         Dense(1),
         LinearInBounds(0.1, 4, clip=True),
-    ])(input)
+    ], ns='mask_weight_blending')(input)
 
 
 def get_lighting_generator(inputs, nb_units):
@@ -431,6 +432,12 @@ def get_lighting_generator(inputs, nb_units):
         GaussianBlur(sigma=6),
     ])(light_scale16)
 
+    outputs = [light_scale16, light_shift16, light_scale32, light_shift32]
+
+    namespace('shift', light_conv, [light_shift32])
+    namespace('scale', light_conv, [light_scale32])
+    namespace('lighting', inputs, outputs)
+
     # TODO:
     # dog = DifferenceOfGaussians(2, 6, window_radius2=10)
     # sum_below = SumBelow(1)
@@ -439,7 +446,7 @@ def get_lighting_generator(inputs, nb_units):
     return light_scale16, light_shift16, light_scale32, light_shift32
 
 
-def get_offset_merge_mask(input, nb_units, nb_conv_layers):
+def get_offset_merge_mask(input, nb_units, nb_conv_layers, ns=None):
     def conv_layers():
         return [
             Convolution2D(nb_units, 3, 3, border_mode='same'),
@@ -449,7 +456,7 @@ def get_offset_merge_mask(input, nb_units, nb_conv_layers):
     layers = []
     for i in range(nb_conv_layers):
         layers.extend(conv_layers())
-    return sequential(layers)(input)
+    return sequential(layers, ns=ns)(input)
 
 
 def mask_blending_generator(
@@ -512,13 +519,11 @@ def conv(nb_filter, h, w, activation='relu'):
     else:
         activation_layer = Activation(activation)
 
-    def call(x):
-        return sequential([
-            Convolution2D(nb_filter, h, w, border_mode='same'),
-            BatchNormalization(axis=1),
-            activation_layer
-        ])(x)
-    return call
+    return [
+        Convolution2D(nb_filter, h, w, border_mode='same'),
+        BatchNormalization(axis=1),
+        activation_layer
+    ]
 
 
 def deconv(model, nb_filter, h, w, activation='relu'):
