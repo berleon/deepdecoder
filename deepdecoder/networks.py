@@ -229,6 +229,29 @@ def mask_generator_with_conv(nb_units=64, input_dim=20, init=normal(0.02),
     return model
 
 
+class MinCoveredRegularizer(Regularizer):
+    def __init__(self, mask_size=32, min_covered=1/8, max_loss=4):
+        self.mask_size = mask_size
+        self.min_covered = min_covered
+        self.max_loss = max_loss
+
+    def set_layer(self, layer):
+        self.layer = layer
+
+    def __call__(self, loss):
+        if not hasattr(self, 'layer'):
+            raise Exception('Need to call `set_layer` on '
+                            'MaskRegularizer instance '
+                            'before calling the instance.')
+        min_tag_size = self.mask_size**2 * self.min_covered
+        factor = min_tag_size / self.max_loss
+        out = self.layer.output
+        out_sum = out.sum(axis=(1, 2, 3))
+        reg_loss = K.switch(out_sum <= min_tag_size,
+                            factor*(out_sum - min_tag_size)**2, 0)
+        return K.in_train_phase(loss + reg_loss.mean(), loss)
+
+
 def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
                    trainable=True):
     n = nb_units
@@ -493,8 +516,13 @@ def mask_blending_generator(
 
         mask_weight32 = mask_weight_blending(offset_middle_)
 
-        mask_selection = Selection(threshold=-0.03, smooth_threshold=0.08,
-                                   sigma=1.5)(mask)
+        selection = Selection(threshold=-0.03, smooth_threshold=0.08,
+                              sigma=1.5)
+        reg = MinCoveredRegularizer()
+        selection.regularizers = [reg]
+        reg.set_layer(selection)
+        mask_selection = selection(mask)
+
         mask_with_lighting = AddLighting(scale_factor=0.75, shift_factor=1)(
                 [mask, light_scale32, light_shift32])
 
