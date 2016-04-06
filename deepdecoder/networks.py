@@ -30,7 +30,7 @@ import keras.backend as K
 
 from beras.layers.attention import RotationTransformer
 from beras.gan import GAN, gan_outputs
-from beras.util import sequential, concat
+from beras.util import sequential, concat, collect_layers, load_weights
 from beras.regularizers import ActivityInBoundsRegularizer, SumBelow
 from beras.layers.core import Split, ZeroGradient, LinearInBounds
 
@@ -228,15 +228,15 @@ def mask_generator_with_conv(nb_units=64, input_dim=20, init=normal(0.02),
     return model
 
 
-def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2):
+def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
+                   trainable=True):
     n = nb_units
 
     def conv(n):
-        def call(x):
-            conv = Convolution2D(n, 3, 3, border_mode='same',
-                                 init='he_normal')(x)
-            return Activation('relu')(conv)
-        return call
+        return [
+            Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
+            Activation('relu'),
+        ]
 
     dense_layers = [
         Dense(dense_factor*nb_units, activation='relu')
@@ -253,9 +253,9 @@ def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2):
         conv(2*n),
         UpSampling2D(),  # 32x32
         conv(n),
-        Deconvolution2D(1, 3, 3, border_mode=(1, 1)),
+        Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
         Activation('linear'),
-    ])(input)
+    ], ns='mask_gen', trainable=trainable)(input)
 
 
 def dcgan_small_generator(nb_units=64, input_dim=20, init=normal(0.02),
@@ -343,7 +343,7 @@ def autoencoder_with_mask_loss(encoder, decoder, batch_size=128):
     return encoder
 
 
-def get_mask_driver(x, nb_units):
+def get_mask_driver(x, nb_units, nb_output_units):
     n = nb_units
     driver = sequential([
         Dense(n),
@@ -354,6 +354,8 @@ def get_mask_driver(x, nb_units):
         BatchNormalization(),
         Dropout(0.25),
         Activation('relu'),
+        Dense(nb_output_units),
+        BatchNormalization(),
     ])
     return driver(x)
 
@@ -390,7 +392,7 @@ def get_offset_back(inputs, nb_units):
     return sequential([
         UpSampling2D(),  # 64x64
         conv(n, 3, 3),
-        Deconvolution2D(1, 3, 3, border_mode=(1, 1)),
+        Convolution2D(1, 3, 3, border_mode='same'),
         LinearInBounds(-1, 1, clip=True),
     ])(input)
 
@@ -461,12 +463,17 @@ def mask_blending_generator(
         offset_middle,
         offset_back,
         mask_weight_blending,
+        mask_generator_weights=None,
         ):
 
     def generator(inputs):
         z,  = inputs
         driver = mask_driver(z)
         mask = mask_generator(driver)
+        if mask_generator_weights:
+            mask_layers = collect_layers(driver, mask)
+            load_weights(mask_layers, mask_generator_weights)
+
         mask_down = PyramidReduce()(mask)
 
         offset_front_ = offset_front([z])
