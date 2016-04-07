@@ -242,7 +242,7 @@ class PyramidBlending(Layer):
         self.mask_weights = collect_weights(
             variable_mask_weights, [1, 1, 0])
         self.offset_weights = collect_weights(
-            variable_offset_weights, [0, 0, 1])
+            variable_offset_weights, [1, 1, 1])
         super().__init__(**kwargs)
 
     def get_output_shape_for(self, input_shapes):
@@ -277,7 +277,8 @@ class PyramidBlending(Layer):
             self.offset_weights, idx)
         mask_weights = collect_variable_weights_inputs(
             self.mask_weights, idx + nb_variable_offsets)
-
+        offset_weights = fill(offset_weights, value=0)
+        mask_weights = fill(mask_weights, value=0)
         gauss_pyr_in = list(pyramid_gaussian(
             offset, self.offset_pyramid_layers))
         gauss_pyr_mask = list(pyramid_gaussian(mask, self.mask_pyramid_layers))
@@ -291,9 +292,13 @@ class PyramidBlending(Layer):
                             gauss_pyr_mask[-1:])
 
         blend_pyr = []
+        pyramids = [pyr_select, lap_pyr_in, lap_pyr_mask, offset_weights,
+                    mask_weights]
+        assert len({len(p) for p in pyramids}) == 1, \
+            "Different pyramid heights"
+
         for selection, lap_in, lap_mask, offset_weight, mask_weight in \
-                zip(pyr_select, lap_pyr_in, lap_pyr_mask,
-                    offset_weights, mask_weights):
+                zip(*pyramids):
             if lap_in is None:
                 lap_in = K.zeros_like(lap_mask)
             elif lap_mask is None:
