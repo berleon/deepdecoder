@@ -43,7 +43,7 @@ from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
 from deepdecoder.data import nb_normalized_params
 from deepdecoder.mask_loss import pyramid_loss
 from deepdecoder.transform import PyramidBlending, PyramidReduce, \
-    AddLighting, Selection, GaussianBlur, UpsampleInterpolate
+    AddLighting, Selection, GaussianBlur
 
 
 def get_decoder_model(nb_output=NUM_MIDDLE_CELLS, inputs=['input'],
@@ -380,6 +380,7 @@ def get_mask_driver(x, nb_units, nb_output_units):
         Activation('relu'),
         Dense(nb_output_units),
         BatchNormalization(),
+        GaussianNoise(0.08),
     ], ns='driver')
     return driver(x)
 
@@ -427,7 +428,7 @@ def get_mask_weight_blending(inputs):
         Convolution2D(1, 3, 3),
         Flatten(),
         Dense(1),
-        LinearInBounds(0.1, 4, clip=True),
+        LinearInBounds(K.variable(0.1), K.variable(2), clip=True),
     ], ns='mask_weight_blending')(input)
 
 
@@ -506,7 +507,7 @@ def mask_blending_generator(
 
         mask_down = PyramidReduce()(mask)
 
-        offset_front_ = offset_front([z])
+        offset_front_ = offset_front([z, ZeroGradient()(driver)])
         light_scale16, light_shift16, light_scale32, light_shift32 = \
             lighting_generator([offset_front_, light_merge_mask16(mask_down)])
 
@@ -516,14 +517,15 @@ def mask_blending_generator(
 
         mask_weight32 = mask_weight_blending(offset_middle_)
 
-        selection = Selection(threshold=-0.03, smooth_threshold=0.08,
+        selection = Selection(threshold=-0.08, smooth_threshold=0.2,
                               sigma=1.5)
         reg = MinCoveredRegularizer()
         selection.regularizers = [reg]
         reg.set_layer(selection)
         mask_selection = selection(mask)
 
-        mask_with_lighting = AddLighting(scale_factor=0.75, shift_factor=1)(
+        mask_with_lighting = AddLighting(
+            scale_factor=0.75, shift_factor=0.75)(
                 [mask, light_scale32, light_shift32])
 
         offset_mask_light32 = offset_merge_mask32(mask_with_lighting)
