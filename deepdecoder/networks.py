@@ -25,6 +25,7 @@ from keras.layers.convolutional import Convolution2D, MaxPooling2D, UpSampling2D
 from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.normalization import BatchNormalization
 from keras.layers.noise import GaussianNoise
+from keras.regularizers import Regularizer
 from keras.engine.topology import merge
 import keras.backend as K
 
@@ -32,8 +33,9 @@ from beras.layers.attention import RotationTransformer
 from beras.gan import GAN, gan_outputs
 from beras.util import sequential, concat, collect_layers, load_weights, \
     namespace
-from beras.regularizers import ActivityInBoundsRegularizer, SumBelow
-from beras.layers.core import Split, ZeroGradient, LinearInBounds
+from beras.regularizers import ActivityInBoundsRegularizer, \
+    SumOfActivityBelowRegularizer, with_regularizer
+from beras.layers.core import Split, SplitAt, ZeroGradient, LinearInBounds, Switch
 
 from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE
 
@@ -43,7 +45,8 @@ from deepdecoder.utils import binary_mask, rotate_by_multiple_of_90
 from deepdecoder.data import nb_normalized_params
 from deepdecoder.mask_loss import pyramid_loss
 from deepdecoder.transform import PyramidBlending, PyramidReduce, \
-    AddLighting, Selection, GaussianBlur
+    AddLighting, Selection, GaussianBlur, HighFrequencies, \
+    LowFrequenciesRegularizer
 
 
 def get_decoder_model(nb_output=NUM_MIDDLE_CELLS, inputs=['input'],
@@ -234,6 +237,7 @@ class MinCoveredRegularizer(Regularizer):
         self.mask_size = mask_size
         self.min_covered = min_covered
         self.max_loss = max_loss
+        self.uses_learning_phase = True
 
     def set_layer(self, layer):
         self.layer = layer
@@ -276,6 +280,8 @@ def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
         conv(2*n),
         conv(2*n),
         UpSampling2D(),  # 32x32
+        conv(n),
+        UpSampling2D(),  # 64x64
         conv(n),
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
         Activation('linear'),
@@ -380,7 +386,7 @@ def get_mask_driver(x, nb_units, nb_output_units):
         Activation('relu'),
         Dense(nb_output_units),
         BatchNormalization(),
-        GaussianNoise(0.08),
+        LinearInBounds(-1, 1),
     ], ns='driver')
     return driver(x)
 
@@ -396,7 +402,9 @@ def get_offset_front(inputs, nb_units):
         Reshape((8*n, 4, 4)),
         UpSampling2D(),  # 8x8
         conv(4*n, 3, 3),
+        conv(4*n, 3, 3),
         UpSampling2D(),  # 16x16
+        conv(2*n, 3, 3),
         conv(2*n, 3, 3),
     ], ns='offset.front')(input)
 
@@ -408,27 +416,32 @@ def get_offset_middle(inputs, nb_units):
         UpSampling2D(),  # 32x32
         conv(2*n, 3, 3),
         conv(2*n, 3, 3),
+        conv(2*n, 3, 3),
     ], ns='offset.middle')(input)
 
 
 def get_offset_back(inputs, nb_units):
     n = nb_units
     input = concat(inputs)
-    return sequential([
+    back_feature_map = sequential([
         UpSampling2D(),  # 64x64
         conv(n, 3, 3),
-        Convolution2D(1, 3, 3, border_mode='same'),
-        LinearInBounds(-1, 1, clip=True),
+        conv(n, 3, 3),
     ], ns='offset.back')(input)
 
+    return back_feature_map, sequential([
+        Convolution2D(1, 3, 3, border_mode='same'),
+        LinearInBounds(-1, 1, clip=True),
+    ], ns='offset.back_out')(back_feature_map)
 
-def get_mask_weight_blending(inputs):
+
+def get_mask_weight_blending(inputs, min=0, max=2):
     input = concat(inputs)
     return sequential([
         Convolution2D(1, 3, 3),
         Flatten(),
         Dense(1),
-        LinearInBounds(K.variable(0.1), K.variable(2), clip=True),
+        LinearInBounds(K.variable(min), K.variable(2), clip=True),
     ], ns='mask_weight_blending')(input)
 
 
@@ -436,51 +449,73 @@ def get_lighting_generator(inputs, nb_units):
     n = nb_units
     input = concat(inputs)
     light_conv = sequential([
+        conv(n, 5, 5),
+        conv(n, 5, 5),
         conv(n, 3, 3),
+        UpSampling2D(),  # 32x32
+        conv(n, 5, 5),
         Convolution2D(2, 1, 1, border_mode='same'),
+        UpSampling2D(),  # 64x64
         LinearInBounds(-1, 1, clip=True),
-    ])(input)
+        GaussianBlur(sigma=4),
+    ], ns='lighting')(input)
 
-    shift_split = Split(0, 1, axis=1)(light_conv)
-    light_shift16 = GaussianBlur(sigma=2)(shift_split)
-    light_shift32 = sequential([
-        UpSampling2D(),
-        GaussianBlur(sigma=8),
-    ])(light_shift16)
+    shift = Split(0, 1, axis=1)(light_conv)
+    scale = Split(1, 2, axis=1)(light_conv)
 
-    scale_split = Split(1, 2, axis=1)(light_conv)
-    light_scale16 = GaussianBlur(sigma=2)(scale_split)
-
-    light_scale32 = sequential([
-        UpSampling2D(),
-        GaussianBlur(sigma=6),
-    ])(light_scale16)
-
-    outputs = [light_scale16, light_shift16, light_scale32, light_shift32]
-
-    namespace('shift', light_conv, [light_shift32])
-    namespace('scale', light_conv, [light_scale32])
-    namespace('lighting', inputs, outputs)
-
-    # TODO:
-    # dog = DifferenceOfGaussians(2, 6, window_radius2=10)
-    # sum_below = SumBelow(1)
-    # dog.regularizers = [sum_below]
-    # sum_below.set_layer(dog)
-    return light_scale16, light_shift16, light_scale32, light_shift32
+    return shift, scale
 
 
-def get_offset_merge_mask(input, nb_units, nb_conv_layers, ns=None):
-    def conv_layers():
-        return [
-            Convolution2D(nb_units, 3, 3, border_mode='same'),
+def get_mask_postprocess(inputs, nb_units):
+    n = nb_units
+    return sequential([
+        conv(n, 3, 3),
+        conv(n, 3, 3),
+        Deconvolution2D(1, 5, 5, border_mode=(2, 2)),
+        LinearInBounds(-1, 1, clip=True),
+    ], ns='mask_post')(concat(inputs))
+
+
+def get_offset_merge_mask(input, nb_units, nb_conv_layers, poolings=None, ns=None):
+    def conv_layers(units, pooling):
+        layers = [Convolution2D(units, 3, 3, border_mode='same')]
+        if pooling:
+            layers.append(MaxPooling2D())
+        layers.extend([
             BatchNormalization(axis=1),
             Activation('relu'),
-        ]
+        ])
+        return layers
+
+    if poolings is None:
+        poolings = [False] * nb_conv_layers
+    if type(nb_units) == int:
+        nb_units = [nb_units] * nb_conv_layers
     layers = []
-    for i in range(nb_conv_layers):
-        layers.extend(conv_layers())
+    for i, (units, pooling) in enumerate(zip(nb_units, poolings)):
+        layers.extend(conv_layers(units, pooling))
     return sequential(layers, ns=ns)(input)
+
+
+def get_bits(z):
+    return Lambda(lambda x: 2*K.cast(x > 0, K.floatx()) - 1)(z)
+
+
+class NormSinCosAngle(Layer):
+    def __init__(self, idx, **kwargs):
+        self.sin_idx = idx
+        self.cos_idx = idx + 1
+        super().__init__(**kwargs)
+
+    def get_output(self, x, mask=None):
+        sin = x[:, self.sin_idx]
+        cos = x[:, self.cos_idx]
+        eps = 1e7
+        scale = K.sqrt(1/(eps + sin**2 + cos**2))
+        sin = K.clip(scale*sin, -1, 1)
+        cos = K.clip(scale*cos, -1, 1)
+        return K.concatenate([x[:, :self.sin_idx], scale*sin, scale*cos,
+                              x[:, self.cos_idx+1:]], axis=1)
 
 
 def mask_blending_generator(
@@ -489,61 +524,88 @@ def mask_blending_generator(
         light_merge_mask16,
         offset_merge_mask16,
         offset_merge_mask32,
+        offset_merge_light16,
         lighting_generator,
         offset_front,
         offset_middle,
         offset_back,
-        mask_weight_blending,
+        mask_weight_blending32,
+        mask_weight_blending64,
+        mask_postprocess,
+        z_for_bits,
+        z_for_driver,
+        z_for_offset,
         mask_generator_weights=None,
         ):
 
     def generator(inputs):
-        z,  = inputs
-        driver = mask_driver(z)
-        mask = mask_generator(driver)
+        z, = inputs
+        z_driver = Split(*z_for_driver, axis=1)(z)
+        z_offset = Split(*z_for_offset, axis=1)(z)
+        z_bits = Split(*z_for_bits, axis=1)(z)
+        bits = get_bits(z_bits)
+        driver = mask_driver(z_driver)
+        driver_norm = NormSinCosAngle(0)(driver)
+        mask_input = concat([bits, driver_norm], name='mask_gen_in')
+        mask = mask_generator(mask_input)
+
         if mask_generator_weights:
-            mask_layers = collect_layers(driver, mask)
+            mask_layers = collect_layers(mask_input, mask)
             load_weights(mask_layers, mask_generator_weights)
 
+        selection = with_regularizer(Selection(threshold=-0.08,
+                                               smooth_threshold=0.2,
+                                               sigma=1.5, name='selection'),
+                                     MinCoveredRegularizer())
+
         mask_down = PyramidReduce()(mask)
-
-        offset_front_ = offset_front([z, ZeroGradient()(driver)])
-        light_scale16, light_shift16, light_scale32, light_shift32 = \
-            lighting_generator([offset_front_, light_merge_mask16(mask_down)])
-
-        offset_middle_ = offset_middle(
-            [offset_front_, offset_merge_mask16(mask_down), light_scale16,
-             light_shift16])
-
-        mask_weight32 = mask_weight_blending(offset_middle_)
-
-        selection = Selection(threshold=-0.08, smooth_threshold=0.2,
-                              sigma=1.5)
-        reg = MinCoveredRegularizer()
-        selection.regularizers = [reg]
-        reg.set_layer(selection)
         mask_selection = selection(mask)
+        mask_selection_down = PyramidReduce(scale=4)(mask_selection)
+        out_offset_front = offset_front([z_offset,
+                                         ZeroGradient()(driver_norm)])
+
+        light_scale64, light_shift64 = \
+            lighting_generator([out_offset_front,
+                                light_merge_mask16(mask_selection_down)])
 
         mask_with_lighting = AddLighting(
-            scale_factor=0.75, shift_factor=0.75)(
-                [mask, light_scale32, light_shift32])
+            scale_factor=0.5, shift_factor=0.75)(
+                [mask, light_scale64, light_shift64])
 
-        offset_mask_light32 = offset_merge_mask32(mask_with_lighting)
+        out_offset_middle = offset_middle(
+            [out_offset_front, offset_merge_mask16(mask_selection_down),
+             offset_merge_light16(concat(light_scale64, light_shift64))
+             ])
 
-        offset_back_ = offset_back(
-            [offset_middle_, offset_mask_light32])
+        offset_back_feature_map, out_offset_back = offset_back(
+            [out_offset_middle, offset_merge_mask32(mask_down)])
+
+        mask_weight32 = mask_weight_blending32(out_offset_middle)
+        mask_weight64 = mask_weight_blending64(out_offset_middle)
 
         blending = PyramidBlending(offset_pyramid_layers=3,
-                                   mask_pyramid_layers=2,
-                                   variable_mask_weights=[None, True])(
-                [offset_back_, mask_with_lighting, mask_selection,
-                 mask_weight32])
-        return LinearInBounds(-1, 1)(blending)
+                                   mask_pyramid_layers=3,
+                                   mask_weights=['variable', 'variable', 1],
+                                   offset_weights=[1, 1, 1],
+                                   use_selection=[True, True, True],
+                                   name='blending')(
+                [out_offset_back, mask_with_lighting, mask_selection,
+                 mask_weight32, mask_weight64])
+
+        mask_post = mask_postprocess([
+            blending, mask_selection, light_scale64, light_shift64, mask,
+            out_offset_back, offset_back_feature_map
+        ])
+        mask_post_high = HighFrequencies(4, nb_steps=5,
+                                         name='mask_post_high')(mask_post)
+        blending_post = merge([mask_post_high, blending], mode='sum',
+                              name='blending_post')
+        return LinearInBounds(-1.2, 1.2)(blending_post)
 
     return generator
 
 
-def conv(nb_filter, h, w, activation='relu'):
+def conv(nb_filter, h=3, w=3, activation='relu'):
     if issubclass(type(activation), Layer):
         activation_layer = activation
     else:
@@ -697,7 +759,7 @@ def mask_blending_discriminator(x, n=32, out_activation='sigmoid'):
         conv(8*n),
         Flatten(),
         Dense(1, activation=out_activation)
-    ], ns='dis')(concat(x, axis=0))
+    ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
 
 
 def mask_blending_gan(offset_generator, mask_generator, discriminator,

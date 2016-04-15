@@ -180,7 +180,7 @@ class Lecture:
         n_center = self.center.normalize(config[:, CONFIG_CENTER])
         n_radius = self.radius.normalize(config[:, CONFIG_RADIUS, np.newaxis])
         n_config = np.concatenate(
-            [n_rot_z, n_rot_x, n_rot_y, n_center, n_radius], axis=1)
+            [n_rot_z, n_rot_y, n_rot_x, n_center, n_radius], axis=1)
         return n_ids, n_config
 
     def grid_params(self, batch_size):

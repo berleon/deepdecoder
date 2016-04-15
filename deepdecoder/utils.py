@@ -83,7 +83,7 @@ def rotate_by_multiple_of_90(img, rots):
     return img
 
 
-def zip_visualise_tiles(*arrs):
+def zip_visualise_tiles(*arrs, show=True):
     import matplotlib.pyplot as plt
     assert len(arrs) >= 2
     length = len(arrs[0])
@@ -97,4 +97,5 @@ def zip_visualise_tiles(*arrs):
     tiled = tile(tiles, columns_must_be_multiple_of=len(arrs))
     assert len(tiled) == 1, "currently only grayscale image are supported"
     plt.imshow(tiled[0], cmap='gray')
-    plt.show()
+    if show:
+        plt.show()

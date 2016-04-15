@@ -23,7 +23,7 @@ import itertools
 import h5py
 
 from deepdecoder.grid_curriculum import exam, grids_from_lecture, normalize
-from beesgrid import MASK
+from beesgrid import MASK, BlackWhiteArtist
 from beras.data_utils import HDF5Tensor
 from itertools import count
 from skimage.transform import pyramid_reduce, \
@@ -72,7 +72,7 @@ def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
         yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
-def normalize_grid_params(grid_params, lecture=exam()):
+def normalize_grid_params(grid_params, lecture):
     return normalize(lecture, grid_params)
 
 
@@ -81,17 +81,18 @@ def nb_normalized_params():
     return params.shape[-1]
 
 
-def normalize_generator(generator):
+def normalize_generator(generator, lecture):
     for grid_params, grid_idx in generator:
-        yield normalize_grid_params(grid_params), grid_idx
+        yield normalize_grid_params(grid_params, lecture), grid_idx
 
 
-def grids_lecture_generator(batch_size=128, lecture=None):
+def grids_lecture_generator(batch_size=128, lecture=None, scale=1, artist=None):
     if lecture is None:
         lecture = exam()
     while True:
-        params, grid_idx = grids_from_lecture(lecture, batch_size)
-        yield normalize_grid_params(params), grid_idx
+        params, grid_idx = grids_from_lecture(lecture, batch_size,
+                                              scale=scale, artist=artist)
+        yield normalize_grid_params(params, lecture), grid_idx
 
 
 def mean_generator(batch_size=128, mean_distance=0.2):
@@ -166,7 +167,7 @@ def param_mean_grid_idx_generator(batch_size=128, lecture=None,
     for mean, (param, grid_idx) in zip(
             mean_generator(batch_size, mean_distance),
             grids_lecture_generator(batch_size, lecture)):
-        yielself.selection_threshold.concatenate([param, mean], axis=1), grid_idx
+        yield self.selection_threshold.concatenate([param, mean], axis=1), grid_idx
 
 
 def grid_with_mean(grid_idx, mean):
@@ -210,39 +211,34 @@ def np_mean_mask(grid_idx, means):
     return mask
 
 
-def resize_mask(masks, order=1, sigma=0.66):
+def resize_mask(masks, order=1, sigma=0.66, scale=0.5):
     resized = []
     for mask in masks:
         smoothed = scipy.ndimage.gaussian_filter(mask[0], sigma=sigma)
-        small = scipy.ndimage.interpolation.zoom(smoothed, (0.5, 0.5),
+        small = scipy.ndimage.interpolation.zoom(smoothed, (scale, scale),
                                                  order=order)
         resized.append(small)
-    return np.stack(resized).reshape((len(masks), 1, 32, 32))
+    new_size = int(masks.shape[-1] * scale)
+    return np.stack(resized).reshape((len(masks), 1, new_size, new_size))
 
 
-def param_mask_binary_generator(lecture, batch_size=128, ignore=-1):
-    white_ring = MASK_MEAN_PARTS.index(("INNER_WHITE_SEMICIRCLE",))
-    black_ring = MASK_MEAN_PARTS.index(("INNER_BLACK_SEMICIRCLE",))
-    outer_ring = MASK_MEAN_PARTS.index(("OUTER_WHITE_RING",))
-    bits = slice(2, 2+12)
-
-    def bit_binaries(bits):
-        bits[bits < 0.5] = 0
-        bits[bits >= 0.5] = 1
-        return bits
-
-    for param, grid_idx in grids_lecture_generator(batch_size, lecture):
-        means = np.random.uniform(0, 1, (len(param), len(MASK_MEAN_PARTS)))
-        means[:, 0] = ignore
-
-        mean_for_masks = means.copy()
-        mean_for_masks[:, bits] = bit_binaries(mean_for_masks[:, bits])
-        mean_for_masks[:, outer_ring] = 1
-        mean_for_masks[:, white_ring] = 1
-        mean_for_masks[:, black_ring] = 0
-
-        mask = np_mean_mask(grid_idx, mean_for_masks)
-        means = 2*means - 1
+def param_mask_binary_generator(lecture, batch_size=128, scale=1,
+                                antialiasing=4):
+    ignore = -0.25
+    background = 0
+    black = 51
+    white = 255
+    artist = BlackWhiteArtist(black, white, background, antialiasing)
+    for param, grids in grids_lecture_generator(batch_size, lecture,
+                                                scale=scale, artist=artist):
+        noise_scale = 0.9
+        continouse_bits = np.random.uniform(-noise_scale, noise_scale,
+                                            (len(param), NUM_MIDDLE_CELLS))
+        bits = param[:, :NUM_MIDDLE_CELLS]
+        continouse_bits = (continouse_bits + bits) / (1 + noise_scale)
+        need_size = (1 - ignore)
+        scale = 255 / need_size
+        grids_float = (grids / scale + ignore).astype(np.float32)
         param = np.concatenate(
-            [means[:, 1:], param[:, NUM_MIDDLE_CELLS:]], axis=1)
-        yield param, mask
+            [continouse_bits, param[:, NUM_MIDDLE_CELLS:]], axis=1)
+        yield param, grids_float

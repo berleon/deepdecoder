@@ -90,43 +90,6 @@ def normal(scale=0.02):
     return normal_wrapper
 
 
-def get_offset_generator(n=32, batch_input_shape=50, nb_output_channels=1,
-                         init=normal(0.02), merge_mode=None, merge_layer=None):
-    def deconv(model, nb_filter, h, w):
-        model.add(Deconvolution2D(nb_filter, h, w, subsample=(2, 2),
-                                  border_mode=(2, 2), init=init))
-        model.add(BatchNormalization(axis=1))
-        model.add(Activation('relu'))
-
-    front = Sequential()
-    front.add(Dense(8*n*4*4, batch_input_shape=batch_input_shape, init=init))
-    front.add(BatchNormalization())
-    front.add(Activation('relu'))
-    front.add(Reshape((8*n, 4, 4,)))
-
-    deconv(front, 4*n, 5, 5)
-    deconv(front, 2*n, 5, 5)
-
-    if merge_mode != 'merge_16':
-        deconv(front, n, 5, 5)
-
-    input_shape = list(front.output_shape)
-    if merge_layer is not None:
-        input_shape[1] += merge_layer.output_shape[1]
-
-    input_shape = tuple(input_shape)
-    back = Sequential()
-    back.add(Layer(batch_input_shape=input_shape))
-
-    if merge_mode == 'merge_16':
-        deconv(back, n, 5, 5)
-
-    back.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
-                             border_mode=(2, 2), init=init))
-    back.add(LinearInBounds())
-    return front, back
-
-
 def compile(gan, sample):
     lr = sample['lr']
     beta_1 = 0.5
@@ -220,5 +183,7 @@ best = fmin(objective,
 sys.exit(0)
 with open('trails.pickle', 'wb') as f:
     pickle.dump(trials, f)
+if __name__ == "__main__":
+    main()
 
 print(best)

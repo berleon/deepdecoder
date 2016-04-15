@@ -67,4 +67,4 @@ def plt_save_and_maybe_show(fname):
 def astronaut():
     astronaut = skimage.color.rgb2gray(skimage.data.astronaut())
     astronaut /= 255
-    return astronaut[np.newaxis, np.newaxis]
+    return astronaut[np.newaxis, np.newaxis].astype(np.float32)

@@ -17,7 +17,9 @@ from beras.filters import gaussian_filter_2d, gaussian_kernel_default_radius
 from more_itertools import pairwise
 from keras.layers.core import Layer
 from deepdecoder.utils import binary_mask, adaptive_mask
+from keras.regularizers import Regularizer
 import keras.backend as K
+import theano
 
 
 def pyramid_expand(image, sigma=2/3):
@@ -32,8 +34,10 @@ def pyramid_expand(image, sigma=2/3):
     return upsample(image, sigma)
 
 
-def pyramid_reduce(image, sigma=2/3):
-    return resize_interpolate(gaussian_filter_2d(image, sigma), scale=2)
+def pyramid_reduce(image, sigma=None, scale=2):
+    if sigma is None:
+        sigma = scale*2 / 6
+    return resize_interpolate(gaussian_filter_2d(image, sigma), scale=scale)
 
 
 def pyramid_gaussian(image, max_layer, sigma=2/3):
@@ -42,7 +46,7 @@ def pyramid_gaussian(image, max_layer, sigma=2/3):
     prev_image = image
     while layer != max_layer:
         layer += 1
-        layer_image = pyramid_reduce(prev_image, sigma)
+        layer_image = pyramid_reduce(prev_image, sigma=sigma)
         yield layer_image
         prev_image = layer_image
 
@@ -136,12 +140,16 @@ class PyramidBlendingGridIdx(Layer):
 
 
 class PyramidReduce(Layer):
+    def __init__(self, scale=2, **kwargs):
+        self.scale = scale
+        super().__init__(**kwargs)
+
     def get_output_shape_for(self, input_shape):
         shp = input_shape
-        return shp[:2] + (shp[2] // 2, shp[3] // 2)
+        return shp[:2] + (shp[2] // self.scale, shp[3] // self.scale)
 
     def call(self, x, mask=None):
-        return pyramid_reduce(x)
+        return pyramid_reduce(x, scale=self.scale)
 
 
 class GaussianBlur(Layer):
@@ -213,11 +221,55 @@ class AddLighting(Layer):
         return x*(1 - scale*self.scale_factor) + self.shift_factor*shift
 
 
+class LowFrequenciesRegularizer(Regularizer):
+    def __init__(self, sigma, factor=1):
+        self.sigma = sigma
+        self.factor = factor
+        self.uses_learning_phase = True
+
+    def set_layer(self, layer):
+        self.layer = layer
+
+    def __call__(self, loss):
+        if not hasattr(self, 'layer'):
+            raise Exception('Need to call `set_layer` on '
+                            'LowFrequenciesRegularizer instance '
+                            'before calling the instance. ')
+        regularized_loss = K.zeros_like(loss)
+        print(self.layer.inbound_nodes)
+        for i in range(len(self.layer.inbound_nodes)):
+            print(i)
+            out = self.layer.get_output_at(i)
+            low_freq = gaussian_filter_2d(out, self.sigma)
+            regularized_loss += K.sum(K.abs(low_freq)) * self.factor
+        print(regularized_loss)
+        return K.in_train_phase(loss + regularized_loss, loss)
+
+    def get_config(self):
+        return {'name': self.__class__.__name__,
+                'sigma': self.sigma,
+                'factor': self.factor}
+
+
+class HighFrequencies(Layer):
+    def __init__(self, sigma, nb_steps, **kwargs):
+        super().__init__(**kwargs)
+        self.sigma = sigma
+        self.nb_steps = K.variable(nb_steps, dtype='int32')
+
+    def call(self, x, mask=None):
+        high, _ = theano.scan(
+            lambda x: x - gaussian_filter_2d(x, self.sigma),
+            outputs_info=x, n_steps=self.nb_steps)
+        return high[-1]
+
+
 class PyramidBlending(Layer):
     def __init__(self, offset_pyramid_layers=3,
                  mask_pyramid_layers=3,
-                 variable_offset_weights=None,
-                 variable_mask_weights=None,
+                 offset_weights=None,
+                 mask_weights=None,
+                 use_selection=None,
                  **kwargs):
 
         self.offset_pyramid_layers = offset_pyramid_layers
@@ -225,24 +277,29 @@ class PyramidBlending(Layer):
         self.max_pyramid_layers = max(offset_pyramid_layers,
                                       mask_pyramid_layers)
 
-        if variable_offset_weights is None:
-            variable_offset_weights = [None] * self.offset_pyramid_layers
-        if variable_mask_weights is None:
-            variable_mask_weights = [None] * self.mask_pyramid_layers
+        if offset_weights is None:
+            offset_weights = [None] * self.offset_pyramid_layers
+        if mask_weights is None:
+            mask_weights = [None] * self.mask_pyramid_layers
+        if use_selection is None:
+            use_selection = [True] * self.max_pyramid_layers
 
-        def collect_weights(variable_weights, defaults):
-            weights = []
-            for i, var_weight in enumerate(variable_weights):
-                if var_weight is None:
-                    weights.append(K.variable(defaults[i]))
+        self.use_selection = use_selection
+
+        def collect_weights(weights, defaults):
+            new_weights = []
+            for i, weight in enumerate(weights):
+                if weight is None:
+                    new_weights.append(K.variable(defaults[i]))
+                elif type(weight) in (float, int):
+                    new_weights.append(K.variable(weight))
                 else:
-                    weights.append('variable')
-            return weights
+                    new_weights.append(weight)
 
-        self.mask_weights = collect_weights(
-            variable_mask_weights, [1, 1, 0])
-        self.offset_weights = collect_weights(
-            variable_offset_weights, [1, 1, 1])
+            return new_weights
+
+        self.mask_weights = collect_weights(mask_weights, [1, 1, 1])
+        self.offset_weights = collect_weights(offset_weights, [1, 1, 1])
         super().__init__(**kwargs)
 
     def get_output_shape_for(self, input_shapes):
@@ -292,19 +349,23 @@ class PyramidBlending(Layer):
                             gauss_pyr_mask[-1:])
 
         blend_pyr = []
-        pyramids = [pyr_select, lap_pyr_in, lap_pyr_mask, offset_weights,
-                    mask_weights]
+        pyramids = [pyr_select, self.use_selection, lap_pyr_in, lap_pyr_mask,
+                    offset_weights, mask_weights]
         assert len({len(p) for p in pyramids}) == 1, \
             "Different pyramid heights"
 
-        for selection, lap_in, lap_mask, offset_weight, mask_weight in \
-                zip(*pyramids):
+        for selection, use_selection, lap_in, lap_mask, offset_weight, \
+                mask_weight in zip(*pyramids):
+
             if lap_in is None:
                 lap_in = K.zeros_like(lap_mask)
             elif lap_mask is None:
                 lap_mask = K.zeros_like(lap_in)
-            blend = lap_in*selection*offset_weight + \
-                lap_mask*(1 - selection)*mask_weight
+            if use_selection:
+                blend = lap_in*selection*offset_weight + \
+                    lap_mask*(1 - selection)*mask_weight
+            else:
+                blend = lap_in*offset_weight + lap_mask*mask_weight
             blend_pyr.append(blend)
 
         img = None

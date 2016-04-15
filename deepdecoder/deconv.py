@@ -40,7 +40,7 @@ class Deconvolution2D(Layer):
         w = self.init(self.W_shape)
         self.W = K.variable(K.get_value(w).reshape(self.W_shape))
         self.b = K.zeros((self.nb_filter,))
-        self.trainable_weights = [self.W, self.b]
+        self._trainable_weights = [self.W, self.b]
 
     def get_output_shape_for(self, input_shape):
         in_rows, in_cols = input_shape[2:]

@@ -17,14 +17,16 @@ from keras.models import Model
 from keras.layers.core import Dense, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D, UpSampling2D
 from keras.engine.topology import Input
-
+from keras.optimizers import Adam
+from beras.gan import GAN, gan_binary_crossentropy, gan_outputs
+import pytest
 from deepdecoder.networks import *
 
 
 def test_get_offset_merge_mask():
     batch_shape = (64, 1, 16, 16)
     input = Input(shape=batch_shape[1:])
-    output = get_offset_merge_mask([input], 2, nb_conv_layers=1)
+    output = get_offset_merge_mask([input], nb_units=2, nb_conv_layers=1)
     model = Model(input, output)
     model.compile('adam', 'mse')
     x = np.random.sample(batch_shape)
@@ -35,7 +37,7 @@ def test_get_mask_driver():
     batch_shape = (64, 22)
     n = 50
     input = Input(shape=batch_shape[1:])
-    output = get_mask_driver(input, n)
+    output = get_mask_driver(input, nb_units=n, nb_output_units=n)
     model = Model(input, output)
     model.compile('adam', 'mse')
     x = np.random.sample(batch_shape)
@@ -115,22 +117,18 @@ def test_get_lighting_generator():
     b_input = Input(shape=b_shape)
     c_input = Input(shape=c_shape)
 
-    scale16, shift16, scale32, shift32 = \
-        get_lighting_generator([a_input, b_input, c_input], n)
+    scale64, shift64 = get_lighting_generator([a_input, b_input, c_input], n)
 
-    model = Model([a_input, b_input, c_input], [scale16, shift16, scale32, shift32])
+    model = Model([a_input, b_input, c_input], [scale64, shift64])
     model.compile('adam', 'mse')
     bs = (64, )
     a = np.random.sample(bs + a_shape)
     b = np.random.sample(bs + b_shape)
     c = np.random.sample(bs + c_shape)
 
-    y_scale16 = np.random.sample(bs + (1, 16, 16))
-    y_shift16 = np.random.sample(bs + (1, 16, 16))
-    y_scale32 = np.random.sample(bs + (1, 32, 32))
-    y_shift32 = np.random.sample(bs + (1, 32, 32))
-    model.train_on_batch([a, b, c],
-                         [y_scale16, y_shift16, y_scale32, y_shift32])
+    y_scale64 = np.random.sample(bs + (1, 64, 64))
+    y_shift64 = np.random.sample(bs + (1, 64, 64))
+    model.train_on_batch([a, b, c], [y_scale64, y_shift64])
 
 
 def test_mask_generator():
@@ -141,12 +139,12 @@ def test_mask_generator():
     model.compile('adam', 'mse')
     bs = (64, )
     x = np.random.sample(bs + shape)
-    y = np.random.sample(bs + (1, 32, 32))
+    y = np.random.sample(bs + (1, 64, 64))
     model.train_on_batch(x, y)
 
 
 def test_mask_blending_discriminator():
-    fake_shape = (5, 1, 64, 64)
+    fake_shape = (10, 1, 64, 64)
     real_shape = (10, 1, 64, 64)
     fake = Input(batch_shape=fake_shape)
     real = Input(batch_shape=real_shape)
@@ -155,47 +153,58 @@ def test_mask_blending_discriminator():
     model.compile('adam', 'mse')
     f = np.random.sample(fake_shape)
     r = np.random.sample(real_shape)
-    y = np.random.sample((fake_shape[0] + real_shape[1], 1,))
-    model.train_on_batch([f, r], y)
+    y = np.random.sample((fake_shape[0], 1,))
+    # TODO: fix different batch sizes for input and output
+    # y = np.random.sample((fake_shape[0] + real_shape[0], 1,))
+    with pytest.raises(ValueError):
+        model.train_on_batch([f, r], y)
 
 
 def test_mask_blending_generator():
+    nb_driver = 20
+
     def driver(z):
-        return sequential([
-            Dense(16),
-        ])(z)
+        return Dense(nb_driver)(z)
 
     def mask_generator(x):
         return sequential([
             Dense(16),
             Reshape((1, 4, 4)),
-            UpSampling2D((8, 8))
+            UpSampling2D((16, 16))
         ])(x)
 
-    def merge_mask(x):
-        return sequential([
-            Convolution2D(1, 3, 3, border_mode='same')
-        ])(x)
+    def merge_mask(subsample):
+        def call(x):
+            if subsample:
+                x = MaxPooling2D(subsample)(x)
+            return Convolution2D(1, 3, 3, border_mode='same')(x)
+        return call
 
     def light_generator(ins):
         seq = sequential([
             Convolution2D(1, 3, 3, border_mode='same')
         ])(concat(ins))
-        return seq, seq, UpSampling2D()(seq), UpSampling2D()(seq),
+        return UpSampling2D((4, 4))(seq), UpSampling2D((4, 4))(seq),
 
     def offset_front(x):
         return sequential([
             Dense(16),
             Reshape((1, 4, 4)),
             UpSampling2D((4, 4))
-        ])(x)
+        ])(concat(x))
 
     def offset_middle(x):
         return UpSampling2D()(concat(x))
 
     def offset_back(x):
-        return sequential([
+        feature_map = sequential([
             UpSampling2D(),
+        ])(concat(x))
+        return feature_map, Convolution2D(1, 3, 3,
+                                          border_mode='same')(feature_map)
+
+    def mask_post(x):
+        return sequential([
             Convolution2D(1, 3, 3, border_mode='same')
         ])(concat(x))
 
@@ -205,21 +214,39 @@ def test_mask_blending_generator():
             Dense(1),
         ])(x)
 
+    def discriminator(x):
+        return gan_outputs(sequential([
+            Flatten(),
+            Dense(1),
+        ])(concat(x)), fake_for_gen=(0, 10), fake_for_dis=(0, 10),
+                           real=(10, 20))
+
     gen = mask_blending_generator(
         mask_driver=driver,
         mask_generator=mask_generator,
-        light_merge_mask16=merge_mask,
-        offset_merge_mask16=merge_mask,
-        offset_merge_mask32=merge_mask,
+        light_merge_mask16=merge_mask(None),
+        offset_merge_light16=merge_mask((4, 4)),
+        offset_merge_mask16=merge_mask(None),
+        offset_merge_mask32=merge_mask(None),
         lighting_generator=light_generator,
         offset_front=offset_front,
         offset_middle=offset_middle,
         offset_back=offset_back,
-        mask_weight_blending=mask_weight_blending)
-
-    z = Input(shape=(20,), name='z')
-    fake = gen([z])
-    model = Model(z, fake)
-    model.compile('adam', 'mse')
-    z_in = np.random.sample((4, 20))
-    model.predict_on_batch(z_in)
+        mask_weight_blending32=mask_weight_blending,
+        mask_weight_blending64=mask_weight_blending,
+        mask_postprocess=mask_post,
+        z_for_driver=(0, 10),
+        z_for_offset=(10, 20),
+        z_for_bits=(20, 32),
+    )
+    z_shape = (32, )
+    real_shape = (1, 64, 64)
+    gan = GAN(gen, discriminator, z_shape, real_shape)
+    gan.build(Adam(), Adam(), gan_binary_crossentropy)
+    for l in gan.gen_layers:
+        print("{}: {}, {}".format(
+            l.name, l.output_shape, getattr(l, 'regularizers', [])))
+    bs = 10
+    z_in = np.random.sample((bs,) + z_shape)
+    gan.compile_generate()
+    gan.generate({'z': z_in})

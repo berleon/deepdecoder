@@ -14,7 +14,7 @@
 
 from conftest import plt_save_and_maybe_show
 from deepdecoder.transform import blend_pyramid, pyramid_reduce, \
-    pyramid_gaussian
+    pyramid_gaussian, HighFrequencies
 
 import keras.backend as K
 import numpy as np
@@ -95,3 +95,14 @@ def test_util_blending_pyramid(blend_images, blend_pyramid_fn):
     plt.subplot(224)
     plt.imshow(img[0, 0], cmap='gray')
     plt_save_and_maybe_show("utils/blending.png")
+
+
+def test_transform_high_frequencies(astronaut):
+    layer = HighFrequencies(sigma=2, nb_steps=5)
+    layer.build(astronaut.shape)
+    high = layer(theano.shared(astronaut)).eval()
+    plt.subplot(121)
+    plt.imshow(astronaut[0, 0], cmap='gray')
+    plt.subplot(122)
+    plt.imshow(high[0, 0], cmap='gray')
+    plt_save_and_maybe_show("transfrom/high_frequencies.png")
