@@ -19,7 +19,7 @@ import numpy as np
 from math import pi
 
 from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist, \
-    CONFIG_ROTS, CONFIG_CENTER, CONFIG_RADIUS
+    CONFIG_ROTS, CONFIG_CENTER, CONFIG_RADIUS, GRID_STRUCTURE_POS
 
 from keras.backend import epsilon
 from keras import callbacks
@@ -69,6 +69,17 @@ class Zeros(Distribution):
         return np.zeros(shape)
 
 
+class Constant(Distribution):
+    def __init__(self, value):
+        self.value = value
+
+    def sample(self, shape):
+        return self.value*np.ones(shape)
+
+    def normalize(self, array):
+        return array - self.value
+
+
 class Normal(Distribution):
     def __init__(self, mean, std):
         self.mean = mean
@@ -115,7 +126,7 @@ class Uniform(Distribution):
             self.low == other.low and self.high == other.high
 
     def normalize(self, array):
-        return 2*(array - self.low) / self.high - 1
+        return 2*(array - self.low) / (self.high - self.low) - 1
 
 
 class DiscretePoints(Distribution):
@@ -157,6 +168,13 @@ class Lecture:
                                      DISTRIBUTION_PARAMS.center.std))
         self.radius = Default(Normal(DISTRIBUTION_PARAMS.radius.mean,
                                      DISTRIBUTION_PARAMS.radius.std))
+
+        self.inner_ring_radius = Default(Constant(0.4))
+        self.middle_ring_radius = Default(Constant(0.8))
+        self.outer_ring_radius = Default(Constant(1))
+        self.bulge_factor = Default(Constant(0.4))
+        self.focal_length = Default(Constant(2))
+
         self.pass_limit = pass_limit
         self.name = name
 
@@ -172,7 +190,7 @@ class Lecture:
         lec.radius = Normal(p['radius']['mean'], p['radius']['std'])
         return lec
 
-    def normalize(self, ids, config):
+    def normalize(self, ids, config, structure):
         n_ids = self.ids.normalize(ids)
         n_rot_z = self.z.normalize(config[:, CONFIG_ROTS[0], np.newaxis])
         n_rot_y = self.y.normalize(config[:, CONFIG_ROTS[1], np.newaxis])
@@ -181,7 +199,21 @@ class Lecture:
         n_radius = self.radius.normalize(config[:, CONFIG_RADIUS, np.newaxis])
         n_config = np.concatenate(
             [n_rot_z, n_rot_y, n_rot_x, n_center, n_radius], axis=1)
-        return n_ids, n_config
+
+        n_inner_ring_radius = self.inner_ring_radius.normalize(
+            structure[:, GRID_STRUCTURE_POS['inner_ring_radius']])
+        n_middle_ring_radius = self.middle_ring_radius.normalize(
+            structure[:, GRID_STRUCTURE_POS['middle_ring_radius']])
+        n_outer_ring_radius = self.outer_ring_radius.normalize(
+            structure[:, GRID_STRUCTURE_POS['outer_ring_radius']])
+        n_bulge_factor = self.bulge_factor.normalize(
+            structure[:, GRID_STRUCTURE_POS['bulge_factor']])
+        n_focal_length = self.focal_length.normalize(
+            structure[:, GRID_STRUCTURE_POS['focal_length']])
+        n_structure = np.stack([
+            n_inner_ring_radius, n_middle_ring_radius, n_outer_ring_radius,
+            n_bulge_factor, n_focal_length], axis=-1)
+        return n_ids, n_config, n_structure
 
     def grid_params(self, batch_size):
         col_shape = (batch_size, 1)
@@ -192,7 +224,18 @@ class Lecture:
         radius = self.radius.sample(col_shape)
         config = np.concatenate([rot_z, rot_y, rot_x, center, radius], axis=1)
         ids = self.ids.sample((batch_size, NUM_MIDDLE_CELLS))
-        return ids, config
+
+        inner_ring_radius = self.inner_ring_radius.sample(col_shape)
+        middle_ring_radius = self.middle_ring_radius.sample(col_shape)
+        outer_ring_radius = self.outer_ring_radius.sample(col_shape)
+        bulge_factor = self.bulge_factor.sample(col_shape)
+        focal_length = self.focal_length.sample(col_shape)
+
+        structure = np.concatenate(
+            [inner_ring_radius, middle_ring_radius, outer_ring_radius,
+             bulge_factor, focal_length], axis=1)
+
+        return ids, config, structure
 
     def has_passed(self, mse):
         return mse <= self.pass_limit
@@ -330,20 +373,15 @@ class CurriculumCallback(callbacks.Callback):
                 self.lecture_id += 1
 
 
-def normalize(lecture, grid_config):
-    n_ids, n_config = lecture.normalize(grid_config[:, :NUM_MIDDLE_CELLS],
-                                        grid_config[:, NUM_MIDDLE_CELLS:])
-    return np.concatenate([n_ids, n_config], axis=1)
-
-
 def grids_from_lecture(lecture, batch_size=128, artist=None, scale=1.):
     if artist is None:
         artist = MaskGridArtist()
-    ids, configs = lecture.grid_params(batch_size)
+    ids, configs, structure = lecture.grid_params(batch_size)
     grids = draw_grids(ids.astype(np.float32), configs.astype(np.float32),
+                       structure.astype(np.float32),
                        scales=[scale], artist=artist)
     assert len(grids) == 1
-    return np.concatenate([ids, configs], axis=1), grids[0]
+    return ids, configs, structure, grids[0]
 
 
 def grid_generator(curriculum_cb, batch_size=128, artist=None,
@@ -352,7 +390,8 @@ def grid_generator(curriculum_cb, batch_size=128, artist=None,
         artist = MaskGridArtist()
     while True:
         lecture = curriculum_cb.current_lecture()
-        yield grids_from_lecture(lecture, batch_size, artist, scale)
+        ids, configs, structure, grids = grids_from_lecture(lecture, batch_size, artist, scale)
+        yield np.concatenate([ids, configs, structure], axis=1), grids
 
 
 def get_generator_and_callback(curriculum, batch_size=128, artist=None, scale=1.):
