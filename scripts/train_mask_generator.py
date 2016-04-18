@@ -33,6 +33,8 @@ import os
 import h5py
 import json
 import argparse
+import pylab
+pylab.rcParams['figure.figsize'] = (20, 20)
 
 
 def generator(fname, batch_size):
@@ -49,17 +51,17 @@ def generator(fname, batch_size):
 
 
 def main(nb_units, nb_epoch):
-    h5_fname = "/home/leon/data/generated_tags_variable.hdf5"
+    h5_fname = "/home/leon/data/generated_tags_variable_depth_map.hdf5"
     batch_size = 32
-    output_dir = "models/holy/mask_generator_variable_n{}/".format(nb_units)
+    output_dir = "models/holy/mask_generator_var_with_depth_n{}_d3/".format(nb_units)
     use_l1_regularizer = False
     assert not os.path.exists(output_dir)
     gen = generator(h5_fname, batch_size)
     nb_input = next(gen)[0][0].shape[1]
 
     x = Input(shape=(nb_input,))
-    out = mask_generator(x, nb_units=nb_units, dense_factor=3,
-                         nb_dense_layers=2)
+    out = mask_generator(x, nb_units=nb_units, dense_factor=7,
+                         nb_dense_layers=3, nb_output_channels=2)
     if use_l1_regularizer:
         layers = collect_layers(x, out)
         for l in layers:
@@ -68,12 +70,8 @@ def main(nb_units, nb_epoch):
             if hasattr(l, 'b_regularizer'):
                 l.b_regularizer = l1(0.001)
     g = Model(x, out)
-
-    print("Compiling...")
-    start = time.time()
     optimizer = Adam()
     g.compile(optimizer, mse)
-    print("Done Compiling in {0:.2f}s".format(time.time() - start))
 
     scheduler = AutomaticLearningRateScheduler(
         optimizer, 'loss', epoch_patience=4, min_improvment=0.0002)
@@ -87,11 +85,14 @@ def main(nb_units, nb_epoch):
     def clip(x):
         return np.clip(x, 0, 1)
 
-    print(ins[1].shape)
-    print(out.shape)
-    zip_visualise_tiles(clip(ins[1]), clip(out), show=False)
     os.makedirs(output_dir, exist_ok=True)
-    plt.savefig(output_dir + "predict.png")
+
+    zip_visualise_tiles(clip(ins[1][:, :1]), clip(out[:, :1]), show=False)
+    plt.savefig(output_dir + "predict_tags.png")
+
+    zip_visualise_tiles(clip(ins[1][:, 1:]), clip(out[:, 1:]), show=False)
+    plt.savefig(output_dir + "predict_depth_map.png")
+
     g.save_weights(output_dir + "mask_generator.hdf5", overwrite=True)
     with open(output_dir + 'mask_generator.json', 'w+') as f:
         f.write(g.to_json())
