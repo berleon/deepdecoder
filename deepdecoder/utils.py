@@ -64,10 +64,12 @@ def loadRealData(fname):
 
 
 def visualise_tiles(images):
-    import matplotlib.pyplot as plt
-    tiled_fakes = tile(images)
-    plt.imshow(tiled_fakes[0], cmap='gray')
-    plt.show()
+    import warnings
+    import beras.visualise
+    warnings.warn(
+        "Call to deprecated function deepdecoder.utils.visualise_tiles."
+        " Use beras.visualise.visualise_tiles", category=DeprecationWarning)
+    return beras.visualise.visualise_tiles(images)
 
 
 def rotate_by_multiple_of_90(img, rots):
