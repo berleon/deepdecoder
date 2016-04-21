@@ -100,6 +100,32 @@ class Normal(Distribution):
         return not self.__eq__(other)
 
 
+class TruncNormal(Distribution):
+    def __init__(self, a, b, mean, std):
+        self.a = a
+        self.b = b
+        self.mean = mean
+        self.std = std
+
+    def sample(self, shape):
+        eps = 1e-7
+        a = self.a / self.std
+        b = self.b / self.std
+        return scipy.stats.truncnorm.rvs(
+            a, b, self.mean, self.std + eps, shape)
+
+    def __eq__(self, other):
+        return super().__eq__(other) and \
+            self.mean == other.mean and self.std == other.std and \
+            self.a == other.a and self.b == other.b
+
+    def normalize(self, array):
+        return 2*(array - (self.mean + self.a)) / (self.b - self.a) - 1
+
+    def __neq__(self, other):
+        return not self.__eq__(other)
+
+
 class SinCosAngleNorm(Distribution):
     def __init__(self, distribution):
         self.distribution = distribution
