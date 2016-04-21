@@ -77,7 +77,7 @@ class Constant(Distribution):
         return self.value*np.ones(shape)
 
     def normalize(self, array):
-        return array - self.value
+        return np.random.uniform(-1, 1, array.shape)
 
 
 class Normal(Distribution):
@@ -94,7 +94,7 @@ class Normal(Distribution):
             self.mean == other.mean and self.std == other.std
 
     def normalize(self, array):
-        return (array - self.mean) / self.std
+        return (array - self.mean) / (2*self.std)
 
     def __neq__(self, other):
         return not self.__eq__(other)
