@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import multiprocessing
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,7 +23,9 @@ from beesgrid import CONFIG_ROTS, CONFIG_RADIUS
 import numpy as np
 from deepdecoder.grid_curriculum import Lecture, z_rot_lecture, \
     y_rot_lecture, reduced_id_lecture, ReduceId, \
-    CurriculumCallback, grid_generator, grids_from_lecture
+    CurriculumCallback, grid_generator, grids_from_lecture, Normal, Uniform,\
+    TruncNormal, Bernoulli, DISTRIBUTION_PARAMS
+
 
 
 def test_lecture_add():
@@ -44,7 +45,7 @@ def test_lecture_add():
 
 def test_lecture_sample():
     n = 128
-    ids, config = Lecture().grid_params(n)
+    ids, config, structure = Lecture().grid_params(n)
     assert ids.shape == (n, NUM_MIDDLE_CELLS)
     assert config.shape == (n, NUM_CONFIGS)
 
@@ -67,7 +68,7 @@ def test_reduced_id_is_unique():
 def test_curriculum_config():
     batch_size = 2**16
     exam = grid_curriculum.exam()
-    ids, configs = exam.grid_params(batch_size)
+    ids, configs, structure = exam.grid_params(batch_size)
     assert type(ids) == np.ndarray
     assert type(configs) == np.ndarray
     assert configs[:, CONFIG_ROTS].mean() <= 0.05
@@ -119,6 +120,48 @@ def test_curriculum_generator_callback():
     assert lecture_id() == 2
     assert cb.model.stop_training
 
+
+def test_distributions_are_invariant_to_normalize():
+    def is_invariant_to_normalize(dist):
+        shape = (100, 20)
+        x = dist.sample(shape)
+        assert x.shape == shape
+        x_norm = dist.normalize(x)
+        assert x_norm.shape == shape
+        x_denorm = dist.denormalize(x_norm)
+        assert x_denorm.shape == shape
+        np.testing.assert_allclose(x_denorm, x)
+
+    is_invariant_to_normalize(Bernoulli())
+    is_invariant_to_normalize(Normal(0, 1))
+    is_invariant_to_normalize(Normal(24, 1))
+    is_invariant_to_normalize(Normal(120, 24))
+    is_invariant_to_normalize(TruncNormal(0, 1, 0.5, 0.1))
+    is_invariant_to_normalize(TruncNormal(-20, 20, -10, 50))
+    is_invariant_to_normalize(Uniform(0, 1))
+    is_invariant_to_normalize(Uniform(50, 60))
+
+
+def test_lecture_is_invariant_to_normalize():
+    def is_invariant(lecture):
+        bs = 128
+        ids, config, structure = lecture.grid_params(bs)
+        ids_norm, config_norm, structure_norm = lecture.normalize(
+            ids, config, structure)
+
+        ids_denorm, config_denorm, structure_denorm = lecture.denormalize(
+            ids_norm, config_norm, structure_norm)
+
+        np.testing.assert_allclose(ids_denorm, ids)
+        np.testing.assert_allclose(config_denorm, config)
+        np.testing.assert_allclose(structure_denorm, structure)
+
+    lecture = Lecture()
+    lecture.inner_ring_radius = Uniform(0.4, 0.5)
+    lecture.focal_length = Uniform(1, 5)
+    lecture.bulge_factor = Uniform(0.1, 0.8)
+    is_invariant(lecture)
+    is_invariant(Lecture.from_params(DISTRIBUTION_PARAMS))
 
 if __name__ == "__main__":
     pytest.main(__file__)
