@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import theano
-import numpy as np
+import numpy as npi
 import copy
 
 from keras.models import Sequential, Graph
@@ -32,7 +32,7 @@ import keras.backend as K
 from beras.layers.attention import RotationTransformer
 from beras.gan import GAN, gan_outputs
 from beras.util import sequential, concat, collect_layers, load_weights, \
-    namespace
+    namespace, rename_layer
 from beras.regularizers import ActivityInBoundsRegularizer, \
     SumOfActivityBelowRegularizer, with_regularizer
 from beras.layers.core import Split, SplitAt, ZeroGradient, LinearInBounds, Switch
@@ -257,35 +257,135 @@ class MinCoveredRegularizer(Regularizer):
 
 
 def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
+                   depth=2,
+                   nb_output_channels=1,
                    trainable=True):
     n = nb_units
 
-    def conv(n):
+    def conv(n, repeats=1):
+
         return [
-            Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
-            Activation('relu'),
+            [
+                Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
+                Activation('relu')
+            ] for _ in range(repeats)
         ]
 
     dense_layers = [
         Dense(dense_factor*nb_units, activation='relu')
         for _ in range(nb_dense_layers)]
-    return sequential(dense_layers + [
+    base = sequential(dense_layers + [
         Dense(8*n*4*4),
         Activation('relu'),
         Reshape((8*n, 4, 4,)),
+        conv(8*n),
         UpSampling2D(),  # 8x8
-        conv(4*n),
-        conv(4*n),
+        conv(4*n, depth),
         UpSampling2D(),  # 16x16
         conv(2*n),
-        conv(2*n),
+    ], ns='mask_gen.base', trainable=trainable)(input)
+
+    mask = sequential([
+        conv(2*n, depth),
         UpSampling2D(),  # 32x32
-        conv(n),
+        conv(n, 2),
         UpSampling2D(),  # 64x64
-        conv(n),
+        conv(n, 1),
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
-        Activation('linear'),
-    ], ns='mask_gen', trainable=trainable)(input)
+    ], ns='mask_gen.mask', trainable=trainable)(base)
+
+    depth_map = sequential([
+        conv(n // 2, depth - 1),
+        Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
+    ], ns='mask_gen.depth_map', trainable=trainable)(base)
+
+    return mask, depth_map
+
+
+def mask_generator_all_conv(input, nb_units=64, depth=2, filter_size=3):
+    n = nb_units
+    def conv(n, repeats=1, f=None):
+        if f is None:
+            f = filter_size
+        return [
+            [
+                Convolution2D(n, f, f, border_mode='same', init='he_normal'),
+                Activation('relu')
+            ] for _ in range(repeats)
+        ]
+
+    base = sequential([
+        Reshape((22, 1, 1,)),
+        conv(8*n, depth, f=1),
+        UpSampling2D(),  # 2x2
+        conv(8*n, depth, f=2),
+        UpSampling2D(),  # 4x4
+        conv(8*n, depth),
+        UpSampling2D(),  # 8x8
+        conv(4*n, depth),
+        UpSampling2D(),  # 16x16
+        conv(2*n),
+    ], ns='mask_gen.base')(input)
+
+    mask = sequential([
+        conv(2*n, depth),
+        UpSampling2D(),  # 32x32
+        conv(n, depth),
+        UpSampling2D(),  # 64x64
+        conv(n, depth - 1),
+        Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
+    ], ns='mask_gen.mask')(base)
+
+    depth_map = sequential([
+        conv(n // 2, depth - 1),
+        Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
+    ], ns='mask_gen.depth_map')(base)
+
+    return mask, depth_map
+
+def mask_generator_extra(input, nb_units=64, nb_dense=[256, 1024], depth=2,
+                         project_factor=1, filter_size=3):
+    n = nb_units
+    def conv(n, repeats=1):
+        return [
+            [
+                Convolution2D(n, filter_size, filter_size,
+                              border_mode='same', init='he_normal'),
+                Activation('relu')
+            ] for _ in range(repeats)
+        ]
+
+    dense_layers = []
+    for nb in nb_dense:
+        dense_layers.append(
+            Dense(nb, init='he_normal', activation='relu')
+        )
+    base = sequential(dense_layers + [
+        Dense(8*n*4*4*project_factor),
+        Activation('relu'),
+        Reshape((8*n*project_factor, 4, 4,)),
+        conv(8*n, depth),
+        UpSampling2D(),  # 8x8
+        conv(4*n, depth),
+        UpSampling2D(),  # 16x16
+        conv(2*n),
+    ], ns='mask_gen.base')(input)
+
+    mask = sequential([
+        conv(2*n, depth),
+        UpSampling2D(),  # 32x32
+        conv(n, depth),
+        UpSampling2D(),  # 64x64
+        conv(n, depth - 1),
+        Convolution2D(1, 5, 5, border_mode='same', init='he_normal'),
+    ], ns='mask_gen.mask')(base)
+
+    depth_map = sequential([
+        conv(n // 2, depth - 1),
+        Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
+    ], ns='mask_gen.depth_map')(base)
+
+    return mask, depth_map
 
 
 def dcgan_small_generator(nb_units=64, input_dim=20, init=normal(0.02),
@@ -386,7 +486,7 @@ def get_mask_driver(x, nb_units, nb_output_units):
         Activation('relu'),
         Dense(nb_output_units),
         BatchNormalization(),
-        LinearInBounds(-1, 1),
+        LinearInBounds(-1, 1, clip=True),
     ], ns='driver')
     return driver(x)
 
@@ -449,21 +549,25 @@ def get_lighting_generator(inputs, nb_units):
     n = nb_units
     input = concat(inputs)
     light_conv = sequential([
-        conv(n, 5, 5),
-        conv(n, 5, 5),
+        conv(n, 5, 5),   # 16x16
+        MaxPooling2D(),  # 8x8
         conv(n, 3, 3),
+        conv(n, 3, 3),
+        UpSampling2D(),  # 16x16
+        conv(n, 5, 5),
         UpSampling2D(),  # 32x32
         conv(n, 5, 5),
-        Convolution2D(2, 1, 1, border_mode='same'),
+        Convolution2D(3, 1, 1, border_mode='same'),
         UpSampling2D(),  # 64x64
         LinearInBounds(-1, 1, clip=True),
-        GaussianBlur(sigma=4),
+        GaussianBlur(sigma=3.5),
     ], ns='lighting')(input)
 
     shift = Split(0, 1, axis=1)(light_conv)
-    scale = Split(1, 2, axis=1)(light_conv)
+    scale_black = Split(1, 2, axis=1)(light_conv)
+    scale_white = Split(2, 3, axis=1)(light_conv)
 
-    return shift, scale
+    return shift, scale_black, scale_white
 
 
 def get_mask_postprocess(inputs, nb_units):
@@ -471,8 +575,7 @@ def get_mask_postprocess(inputs, nb_units):
     return sequential([
         conv(n, 3, 3),
         conv(n, 3, 3),
-        Deconvolution2D(1, 5, 5, border_mode=(2, 2)),
-        LinearInBounds(-1, 1, clip=True),
+        Convolution2D(1, 5, 5, border_mode='same', init=normal(scale=0.1)),
     ], ns='mask_post')(concat(inputs))
 
 
@@ -547,11 +650,15 @@ def mask_blending_generator(
         driver = mask_driver(z_driver)
         driver_norm = NormSinCosAngle(0)(driver)
         mask_input = concat([bits, driver_norm], name='mask_gen_in')
-        mask = mask_generator(mask_input)
+        mask, mask_depth_map = mask_generator(mask_input)
 
         if mask_generator_weights:
-            mask_layers = collect_layers(mask_input, mask)
-            load_weights(mask_layers, mask_generator_weights)
+            mask_layers = collect_layers(mask_input, [mask, mask_depth_map])
+            load_weights(mask_layers, mask_generator_weights,
+                         nb_input_layers=1)
+
+        rename_layer(mask, 'mask')
+        rename_layer(mask_depth_map, 'mask_depth_map')
 
         selection = with_regularizer(Selection(threshold=-0.08,
                                                smooth_threshold=0.2,
@@ -560,47 +667,46 @@ def mask_blending_generator(
 
         mask_down = PyramidReduce()(mask)
         mask_selection = selection(mask)
-        mask_selection_down = PyramidReduce(scale=4)(mask_selection)
+
         out_offset_front = offset_front([z_offset,
                                          ZeroGradient()(driver_norm)])
 
-        light_scale64, light_shift64 = \
-            lighting_generator([out_offset_front,
-                                light_merge_mask16(mask_selection_down)])
+        light_outs = list(lighting_generator(
+            [out_offset_front, light_merge_mask16(mask_depth_map)]))
 
         mask_with_lighting = AddLighting(
-            scale_factor=0.5, shift_factor=0.75)(
-                [mask, light_scale64, light_shift64])
+            scale_factor=0.6, shift_factor=0.75,
+            name='mask_with_lighting')([mask] + light_outs)
 
         out_offset_middle = offset_middle(
-            [out_offset_front, offset_merge_mask16(mask_selection_down),
-             offset_merge_light16(concat(light_scale64, light_shift64))
-             ])
+            [out_offset_front, offset_merge_mask16(mask_depth_map),
+             offset_merge_light16(concat(light_outs))])
 
         offset_back_feature_map, out_offset_back = offset_back(
             [out_offset_middle, offset_merge_mask32(mask_down)])
 
-        mask_weight32 = mask_weight_blending32(out_offset_middle)
+        #mask_weight32 = mask_weight_blending32(out_offset_middle)
         mask_weight64 = mask_weight_blending64(out_offset_middle)
 
-        blending = PyramidBlending(offset_pyramid_layers=3,
-                                   mask_pyramid_layers=3,
-                                   mask_weights=['variable', 'variable', 1],
-                                   offset_weights=[1, 1, 1],
-                                   use_selection=[True, True, True],
+        blending = PyramidBlending(offset_pyramid_layers=2,
+                                   mask_pyramid_layers=2,
+                                   mask_weights=['variable', 1],
+                                   offset_weights=[1, 1],
+                                   use_selection=[True, True],
                                    name='blending')(
                 [out_offset_back, mask_with_lighting, mask_selection,
-                 mask_weight32, mask_weight64])
+                 mask_weight64
+                 ])
 
-        mask_post = mask_postprocess([
-            blending, mask_selection, light_scale64, light_shift64, mask,
-            out_offset_back, offset_back_feature_map
-        ])
-        mask_post_high = HighFrequencies(4, nb_steps=5,
+        mask_post = mask_postprocess(
+            [blending, mask_selection, mask, out_offset_back,
+             offset_back_feature_map] + light_outs)
+        rename_layer(mask_post, 'mask_post')
+        mask_post_high = HighFrequencies(4, nb_steps=4,
                                          name='mask_post_high')(mask_post)
         blending_post = merge([mask_post_high, blending], mode='sum',
                               name='blending_post')
-        return LinearInBounds(-1.2, 1.2)(blending_post)
+        return LinearInBounds(-1.2, 1.2, name='generator')(blending_post)
 
     return generator
 
@@ -620,9 +726,9 @@ def conv(nb_filter, h=3, w=3, activation='relu'):
 
 def deconv(model, nb_filter, h, w, activation='relu'):
     def deconv_init(shape, name=None):
-        w = np.random.normal(0, 0.02, shape).astype(np.float32)
+        w = npi.random.normal(0, 0.02, shape).astype(npi.float32)
         nb_filter = shape[1]
-        mask = np.random.binomial(1, 10/nb_filter, (1, nb_filter, 1, 1))
+        mask = npi.random.binomial(1, 10/nb_filter, (1, nb_filter, 1, 1))
         w *= mask
         return K.variable(w, name=name)
 
@@ -709,8 +815,8 @@ def dcgan_generator_conv(n=32, input_dim=50, nb_output_channels=1,
                                        init=init)
         model.add(deconv_layer)
 
-        w = np.random.normal(0, 0.02, deconv_layer.W_shape).astype(np.float32)
-        w *= np.random.uniform(0, 1, (1, w.shape[1], 1, 1))
+        w = npi.random.normal(0, 0.02, deconv_layer.W_shape).astype(npi.float32)
+        w *= npi.random.uniform(0, 1, (1, w.shape[1], 1, 1))
         deconv_layer.W.set_value(w)
         model.add(BatchNormalization(axis=1))
         model.add(Activation('relu'))
@@ -1080,7 +1186,7 @@ def mogan_learn_bw_grid(generator, discriminator, optimizer_fn,
         combined = v  # T.clip(m + alphas*v, 0., 1.)
         return rotate_by_multiple_of_90(combined, z_rot90)
 
-    grid_loss_weight = theano.shared(np.cast[np.float32](1))
+    grid_loss_weight = theano.shared(npi.cast[npi.float32](1))
 
     def grid_loss(g_outmap):
         g_out = g_outmap['output']

@@ -13,8 +13,8 @@
 # limitations under the License.
 #
 
-from beesgrid import GridGenerator, MaskGridArtist, generate_grids, \
-    NUM_MIDDLE_CELLS
+from beesgrid import GridGenerator, MaskGridArtist, DepthMapArtist, \
+    generate_grids, draw_grids
 
 from math import pi
 import numpy as np
@@ -31,7 +31,6 @@ from skimage.transform import pyramid_reduce, \
 
 import scipy.ndimage.interpolation
 import scipy.ndimage
-
 
 floatX = theano.config.floatX
 
@@ -72,8 +71,8 @@ def gen_mask_grids(nb_batches, batch_size=128, scales=[1.]):
         yield (masks[0].astype(floatX),) + tuple(masks[1:])
 
 
-def nb_normalized_params():
-    ids, configs, structure, _ = next(grids_lecture_generator(batch_size=1))
+def nb_normalized_params(lecture=None):
+    ids, configs, structure, _ = next(grids_lecture_generator(batch_size=1, lecture=lecture))
     return sum([a.shape[-1] for a in (ids, configs, structure)])
 
 
@@ -196,3 +195,30 @@ def param_mask_binary_generator(lecture, batch_size=128, scale=1,
         grids_float = (grids / scale + ignore).astype(np.float32)
         param = np.concatenate([bits, configs, structure], axis=1)
         yield param, grids_float
+
+
+def param_mask_binary_depth_map_generator(lecture, batch_size=128,
+                                          antialiasing=4,
+                                          depth_scale=1/4):
+    ignore = -0.25
+    background = 0
+    black = 51
+    white = 255
+    need_size = (1 - ignore)
+    scale = 255 / need_size
+
+    bw_artist = BlackWhiteArtist(black, white, background, antialiasing)
+    depth_map_artist = DepthMapArtist()
+    while True:
+        ids, configs, structure = [a.astype(np.float32)
+                                   for a in lecture.grid_params(batch_size)]
+
+        grids, = draw_grids(ids, configs, structure, artist=bw_artist)
+        depth_maps, = draw_grids(ids, configs, structure,
+                                 artist=depth_map_artist,
+                                 scales=[depth_scale])
+        depth32 = (depth_maps / 255.).astype(np.float32)
+        grids32 = (grids / scale + ignore).astype(np.float32)
+        param = np.concatenate(
+            lecture.normalize(ids, configs, structure), axis=1)
+        yield param, grids32, depth32

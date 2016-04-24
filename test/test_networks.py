@@ -83,7 +83,7 @@ def test_get_offset_back():
     n = 5
     a_input = Input(shape=a_shape)
     b_input = Input(shape=b_shape)
-    output = get_offset_back([a_input, b_input], n)
+    output = get_offset_back([a_input, b_input], n)[1]
     model = Model([a_input, b_input], output)
     model.compile('adam', 'mse')
     bs = (64, )
@@ -117,18 +117,21 @@ def test_get_lighting_generator():
     b_input = Input(shape=b_shape)
     c_input = Input(shape=c_shape)
 
-    scale64, shift64 = get_lighting_generator([a_input, b_input, c_input], n)
+    scale_black, scale_white, shift64 = get_lighting_generator(
+        [a_input, b_input, c_input], n)
 
-    model = Model([a_input, b_input, c_input], [scale64, shift64])
+    model = Model([a_input, b_input, c_input],
+                  [scale_black, scale_white, shift64])
     model.compile('adam', 'mse')
     bs = (64, )
     a = np.random.sample(bs + a_shape)
     b = np.random.sample(bs + b_shape)
     c = np.random.sample(bs + c_shape)
 
-    y_scale64 = np.random.sample(bs + (1, 64, 64))
+    y_scale_black = np.random.sample(bs + (1, 64, 64))
+    y_scale_white = np.random.sample(bs + (1, 64, 64))
     y_shift64 = np.random.sample(bs + (1, 64, 64))
-    model.train_on_batch([a, b, c], [y_scale64, y_shift64])
+    model.train_on_batch([a, b, c], [y_scale_black, y_scale_white, y_shift64])
 
 
 def test_mask_generator():
@@ -168,8 +171,8 @@ def test_mask_blending_generator():
 
     def mask_generator(x):
         return sequential([
-            Dense(16),
-            Reshape((1, 4, 4)),
+            Dense(16*2),
+            Reshape((2, 4, 4)),
             UpSampling2D((16, 16))
         ])(x)
 
@@ -184,7 +187,8 @@ def test_mask_blending_generator():
         seq = sequential([
             Convolution2D(1, 3, 3, border_mode='same')
         ])(concat(ins))
-        return UpSampling2D((4, 4))(seq), UpSampling2D((4, 4))(seq),
+        return UpSampling2D((4, 4))(seq), UpSampling2D((4, 4))(seq), \
+            UpSampling2D((4, 4))(seq),
 
     def offset_front(x):
         return sequential([

@@ -204,21 +204,26 @@ class AddLighting(Layer):
         super().__init__(**kwargs)
 
     def get_output_shape_for(self, input_shape):
-        x_shape, scale_shape, shift_shape = input_shape
-        assert scale_shape == x_shape, \
-            "Scale shape {} does not match input shape {}" \
-            .format(scale_shape, x_shape)
-        assert shift_shape == x_shape, \
-            "Shift shape {} does not match input shape {}" \
-            .format(shift_shape, x_shape)
+        x_shape, scale_black_shape, scale_white_shape, shift_shape = \
+            input_shape
+        assert x_shape == scale_black_shape == \
+            scale_white_shape == shift_shape, \
+            "Input shapes are not equal. Got input shapes: {}".format(
+                ", ".join([str(s) for s in input_shape]))
         return x_shape
 
     def call(self, inputs, mask=None):
         def norm_scale(a):
             return (a + 1) / 2
-        x, scale, shift = inputs
-        scale = norm_scale(scale)
-        return x*(1 - scale*self.scale_factor) + self.shift_factor*shift
+        x, scale_black, scale_white, shift = inputs
+        scale_black = norm_scale(scale_black)
+        black_selection = K.cast(x < 0.5, K.floatx())
+        white_selection = K.cast(x >= 0.5, K.floatx())
+
+        black_scaled = x*black_selection*(1 - scale_black*self.scale_factor)
+        white_scaled = x*white_selection*(1 - scale_white*self.scale_factor)
+        scaled = black_scaled + white_scaled
+        return scaled + self.shift_factor*shift
 
 
 class LowFrequenciesRegularizer(Regularizer):
@@ -368,9 +373,8 @@ class PyramidBlending(Layer):
                 blend = lap_in*offset_weight + lap_mask*mask_weight
             blend_pyr.append(blend)
 
-        img = None
-        for i, (low, high) in enumerate(pairwise(reversed(blend_pyr))):
-            if img is None:
-                img = low
+        img = blend_pyr[-1]
+        for high in reversed(blend_pyr[:-1]):
             img = upsample(img) + high
+
         return img

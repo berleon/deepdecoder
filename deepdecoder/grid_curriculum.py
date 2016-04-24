@@ -16,6 +16,7 @@ import math
 import threading
 
 import numpy as np
+import scipy.stats
 from math import pi
 
 from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist, \
@@ -24,7 +25,6 @@ from beesgrid import draw_grids, NUM_MIDDLE_CELLS, MaskGridArtist, \
 from keras.backend import epsilon
 from keras import callbacks
 from dotmap import DotMap
-
 
 def to_radians(x):
     return x / 180. * np.pi
@@ -77,7 +77,7 @@ class Constant(Distribution):
         return self.value*np.ones(shape)
 
     def normalize(self, array):
-        return np.random.uniform(-1, 1, array.shape)
+        return None
 
 
 class Normal(Distribution):
@@ -217,6 +217,9 @@ class Lecture:
         return lec
 
     def normalize(self, ids, config, structure):
+        def remove_nones(x):
+            return list(filter(lambda x: x is not None, x))
+
         n_ids = self.ids.normalize(ids)
         n_rot_z = self.z.normalize(config[:, CONFIG_ROTS[0], np.newaxis])
         n_rot_y = self.y.normalize(config[:, CONFIG_ROTS[1], np.newaxis])
@@ -236,9 +239,11 @@ class Lecture:
             structure[:, GRID_STRUCTURE_POS['bulge_factor']])
         n_focal_length = self.focal_length.normalize(
             structure[:, GRID_STRUCTURE_POS['focal_length']])
-        n_structure = np.stack([
+        n_structure_list = [
             n_inner_ring_radius, n_middle_ring_radius, n_outer_ring_radius,
-            n_bulge_factor, n_focal_length], axis=-1)
+            n_bulge_factor, n_focal_length
+        ]
+        n_structure = np.stack(remove_nones(n_structure_list), axis=-1)
         return n_ids, n_config, n_structure
 
     def grid_params(self, batch_size):

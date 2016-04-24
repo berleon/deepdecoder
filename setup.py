@@ -26,7 +26,8 @@ setup(name='deepdecoder',
           "scikit-image>=0.11.3",
           "seya",
           "dotmap>=1.1.2",
-          "seaborn"
+          "seaborn",
+          "more_itertools"
       ],
       packages=[
           'deepdecoder',
