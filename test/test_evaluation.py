@@ -14,8 +14,7 @@
 
 import numpy as np
 from deepdecoder.evaluate import GTEvaluator
-from glob import glob
-from beesgrid import NUM_MIDDLE_CELLS, CONFIG_LABELS
+from beesgrid import NUM_MIDDLE_CELLS, CONFIG_LABELS, get_gt_files_in_dir
 
 
 def test_evaluation():
@@ -24,6 +23,6 @@ def test_evaluation():
                np.random.uniform(size=(len(x), len(CONFIG_LABELS)))
 
     gt_dir = '/home/leon/repos/deeplocalizer_data/images/season_2015'
-    gt_files = glob(gt_dir + '/**/*.tdat', recursive=True)
+    gt_files = get_gt_files_in_dir(gt_dir)
     evaluator = GTEvaluator(gt_files)
     results = evaluator.evaluate(predict)

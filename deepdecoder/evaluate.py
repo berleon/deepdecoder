@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from beesgrid import gt_grids, NUM_MIDDLE_CELLS, CONFIG_LABELS
+from beesgrid import gt_grids, NUM_MIDDLE_CELLS, CONFIG_LABELS, CONFIG_CENTER
 import numpy as np
 
 
@@ -20,13 +20,17 @@ def evaluate_decoder(decoder):
     pass
 
 
-def mean_hamming_distance(x, y):
-    return np.count_nonzero(x != y) / len(x)
+def hamming_distance(x, y):
+    return (x != y).sum(axis=-1)
 
 
 def nth_bit_right_accuracy(bits_true, bits_pred, nth):
     accurate = np.sum(bits_true == bits_pred, axis=1) >= nth
     return accurate.mean()
+
+
+def mse(x, y):
+    return ((x - y)**2).mean(axis=-1)
 
 
 class GTEvaluator:
@@ -36,7 +40,7 @@ class GTEvaluator:
 
     def evaluate(self, predict, bit_threshold=0.5):
         gt_images, bits_true, configs_true = \
-            next(gt_grids(self.gt_files, all=True))
+            next(gt_grids(self.gt_files, all=True, center='zero'))
         nb_samples = len(gt_images)
         bits_pred = []
         configs_pred = []
@@ -45,8 +49,6 @@ class GTEvaluator:
             batch_bits_pred, batch_configs_pred = predict(gt_images[i:to])
             threshold_arr = bit_threshold * np.ones_like(batch_bits_pred)
             batch_bits_pred = batch_bits_pred >= threshold_arr
-            print(batch_bits_pred.shape)
-            print(batch_bits_pred.dtype)
             batch_bits_pred = batch_bits_pred.astype(np.float32)
             bits_pred.append(batch_bits_pred)
             configs_pred.append(batch_configs_pred)
@@ -54,17 +56,15 @@ class GTEvaluator:
         bits_pred = np.concatenate(bits_pred, axis=0)
         configs_pred = np.concatenate(configs_pred, axis=0)
         results = {
-            'mean_hamming_distance': mean_hamming_distance(bits_true,
-                                                           bits_pred)
+            'mean_hamming_distance': hamming_distance(
+                bits_true, bits_pred).mean(),
+            'mse_id': mse(bits_true, bits_pred).mean()
         }
         for i in range(1, NUM_MIDDLE_CELLS + 1):
             results['accuracy_{}_bits_right'.format(i)] = \
                 nth_bit_right_accuracy(bits_true, bits_pred, i)
 
-        def mse(x, y):
-            return ((x - y)**2).mean()
-
         for i, label in enumerate(CONFIG_LABELS):
             name = 'mse_{}'.format(label)
-            results[name] = mse(configs_pred[:, i], configs_true[:, i])
+            results[name] = mse(configs_pred[:, i], configs_true[:, i]).mean()
         return results

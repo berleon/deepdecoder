@@ -15,12 +15,66 @@
 import numpy as np
 from keras.models import Model
 from keras.layers.core import Dense, Flatten, Reshape
-from keras.layers.convolutional import Convolution2D, UpSampling2D
+from keras.layers.convolutional import Convolution2D, UpSampling2D, \
+    MaxPooling2D
 from keras.engine.topology import Input
 from keras.optimizers import Adam
 from beras.gan import GAN, gan_binary_crossentropy, gan_outputs
 import pytest
-from deepdecoder.networks import *
+from beesgrid import get_gt_files_in_dir, gt_grids, NUM_MIDDLE_CELLS, \
+    CONFIG_CENTER, NUM_CONFIGS
+
+from beras.util import sequential, concat
+from deepdecoder.networks import mask_blending_generator, get_mask_driver, \
+    get_lighting_generator, get_offset_merge_mask, get_mask_weight_blending, \
+    get_offset_back, get_offset_front, get_offset_middle, mask_generator, \
+    mask_blending_discriminator, get_mask_postprocess, get_decoder_model, \
+    NormSinCosAngle
+
+from deepdecoder.evaluate import GTEvaluator
+from deepdecoder.blending_gan import lecture
+
+
+def test_decoder_model():
+    image_size = 64
+    x = Input(shape=(1, image_size, image_size))
+    out = get_decoder_model(x, nb_units=8,
+                            nb_output=NUM_MIDDLE_CELLS + NUM_CONFIGS + 1)
+    model = Model(x, out)
+    gt_dir = '/home/leon/repos/deeplocalizer_data/images/season_2015'
+    gt_files = get_gt_files_in_dir(gt_dir)
+    gt, ids, config = next(gt_grids(gt_files, all=True, center='zeros'))
+    lec = lecture()
+    ids_norm = lec.normalize_ids(ids)
+    config[:, CONFIG_CENTER] = 0
+    config_norm = lec.normalize_config(config)
+    config_norm[:, CONFIG_CENTER] = 0
+
+    print("config: {}, {}".format(config_norm.max(), config_norm.min()))
+    model.compile('adam', 'mse')
+    model.fit(gt, np.concatenate([ids_norm, config_norm], axis=1), nb_epoch=50)
+    evaluator = GTEvaluator(gt_files)
+
+    def predict(x):
+        outs = model.predict(x)
+        ids = outs[:, :NUM_MIDDLE_CELLS]
+        config = outs[:, NUM_MIDDLE_CELLS:]
+        config_denorm = lec.denormalize_config(config)
+        config_denorm[:, CONFIG_CENTER] = 0
+        return lec.denormalize_ids(ids), config_denorm
+    results = evaluator.evaluate(predict)
+
+    for name, value in sorted(results.items()):
+        if "z_rotation" in name:
+            continue
+        elif "radius" in name:
+            assert value < 0.3, name
+        elif name.startswith("mse"):
+            assert value < 0.1, name
+        elif name.startswith("accuracy"):
+            assert abs(value - 1) < 0.01, name
+
+        print("{}: {}".format(name, value))
 
 
 def test_norm_sin_cos_angle():

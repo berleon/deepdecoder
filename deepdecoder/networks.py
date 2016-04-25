@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import theano
-import numpy as npi
+import numpy as np
 import copy
 
 from keras.models import Sequential, Graph
@@ -26,7 +26,7 @@ from keras.layers.advanced_activations import LeakyReLU
 from keras.layers.normalization import BatchNormalization
 from keras.layers.noise import GaussianNoise
 from keras.regularizers import Regularizer
-from keras.engine.topology import merge
+from keras.engine.topology import merge, Input
 import keras.backend as K
 
 from beras.layers.attention import RotationTransformer
@@ -37,7 +37,7 @@ from beras.regularizers import ActivityInBoundsRegularizer, \
     SumOfActivityBelowRegularizer, with_regularizer
 from beras.layers.core import Split, SplitAt, ZeroGradient, LinearInBounds, Switch
 
-from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE
+from beesgrid import NUM_MIDDLE_CELLS, TAG_SIZE, NUM_CONFIGS
 
 from deepdecoder.deconv import Deconvolution2D
 from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
@@ -49,55 +49,24 @@ from deepdecoder.transform import PyramidBlending, PyramidReduce, \
     LowFrequenciesRegularizer
 
 
-def get_decoder_model(nb_output=NUM_MIDDLE_CELLS, inputs=['input'],
-                      add_output=True, batch_size=None):
-
-    def conv_bn_relu(model, nb_filter, kernel_size=(3, 3), **kwargs):
-        model.add(Convolution2D(nb_filter, *kernel_size, **kwargs))
-        model.add(BatchNormalization(axis=1))
-        model.add(Activation('relu'))
-
-    size = 64
-    rot_model = Sequential()
-    conv_bn_relu(rot_model, 16, batch_input_shape=(batch_size, 1, size, size))
-    rot_model.add(MaxPooling2D((3, 3)))
-    conv_bn_relu(rot_model, 16)
-    rot_model.add(MaxPooling2D((3, 3)))
-    conv_bn_relu(rot_model, 16)
-    rot_model.add(MaxPooling2D((3, 3)))
-    rot_model.add(Flatten())
-    rot_model.add(Dense(64))
-    rot_model.add(BatchNormalization(axis=1))
-    rot_model.add(Activation('relu'))
-
-    rot_model.add(Dense(1, activation='linear'))
-
-    model = Sequential()
-    conv_bn_relu(model, 32, batch_input_shape=(batch_size, 1, size, size))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    conv_bn_relu(model, 64)
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    conv_bn_relu(model, 128)
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    conv_bn_relu(model, 256)
-    model.add(Flatten())
-
-    g = Graph()
-    for input in inputs:
-        g.add_input(input, batch_input_shape=(batch_size, 1, size, size))
-
-    g.add_node(rot_model, "rot", inputs=inputs,
-               concat_axis=0)
-    g.add_node(RotationTransformer(rot_model), "rot_input", inputs=inputs,
-               concat_axis=0)
-    g.add_node(model, "conv_encoder", input="rot_input")
-    g.add_node(Dense(1024, activation='relu'), "dense1",
-               inputs=["conv_encoder", "rot"])
-    g.add_node(Dense(nb_output, activation='linear'), "encoder",
-               input="dense1")
-    if add_output:
-        g.add_output("output", input="encoder")
-    return g
+def get_decoder_model(
+        input,
+        nb_units,
+        nb_output=NUM_MIDDLE_CELLS + NUM_CONFIGS,
+        depth=1):
+    n = nb_units
+    d = depth
+    return sequential([
+        conv(n, depth=d),
+        MaxPooling2D(),  # 32x32
+        conv(2*n, depth=d),
+        MaxPooling2D(),  # 16x16
+        conv(8*n, depth=d),
+        MaxPooling2D(),  # 8x8
+        conv(8*n, depth=d),
+        Flatten(),
+        Dense(nb_output)
+    ])(input)
 
 
 def autoencoder_mask_decoder(nb_output=21, batch_size=128,
@@ -263,7 +232,6 @@ def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
     n = nb_units
 
     def conv(n, repeats=1):
-
         return [
             [
                 Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
@@ -473,6 +441,12 @@ def autoencoder_with_mask_loss(encoder, decoder, batch_size=128):
     return encoder
 
 
+def constant_init(value):
+    def wrapper(shape, name=None):
+        return K.variable(value*np.ones(shape), name=name)
+    return wrapper
+
+
 def get_mask_driver(x, nb_units, nb_output_units):
     n = nb_units
     driver = sequential([
@@ -485,7 +459,7 @@ def get_mask_driver(x, nb_units, nb_output_units):
         Dropout(0.25),
         Activation('relu'),
         Dense(nb_output_units),
-        BatchNormalization(),
+        BatchNormalization(gamma_init=constant_init(0.25)),
         LinearInBounds(-1, 1, clip=True),
     ], ns='driver')
     return driver(x)
@@ -716,24 +690,26 @@ def mask_blending_generator(
     return generator
 
 
-def conv(nb_filter, h=3, w=3, activation='relu'):
+def conv(nb_filter, h=3, w=3, depth=1, activation='relu'):
     if issubclass(type(activation), Layer):
         activation_layer = activation
     else:
         activation_layer = Activation(activation)
 
     return [
-        Convolution2D(nb_filter, h, w, border_mode='same'),
-        BatchNormalization(axis=1),
-        activation_layer
+        [
+            Convolution2D(nb_filter, h, w, border_mode='same'),
+            BatchNormalization(axis=1),
+            activation_layer
+        ] for _ in range(depth)
     ]
 
 
 def deconv(model, nb_filter, h, w, activation='relu'):
     def deconv_init(shape, name=None):
-        w = npi.random.normal(0, 0.02, shape).astype(npi.float32)
+        w = np.random.normal(0, 0.02, shape).astype(np.float32)
         nb_filter = shape[1]
-        mask = npi.random.binomial(1, 10/nb_filter, (1, nb_filter, 1, 1))
+        mask = np.random.binomial(1, 10/nb_filter, (1, nb_filter, 1, 1))
         w *= mask
         return K.variable(w, name=name)
 
@@ -820,8 +796,8 @@ def dcgan_generator_conv(n=32, input_dim=50, nb_output_channels=1,
                                        init=init)
         model.add(deconv_layer)
 
-        w = npi.random.normal(0, 0.02, deconv_layer.W_shape).astype(npi.float32)
-        w *= npi.random.uniform(0, 1, (1, w.shape[1], 1, 1))
+        w = np.random.normal(0, 0.02, deconv_layer.W_shape).astype(np.float32)
+        w *= np.random.uniform(0, 1, (1, w.shape[1], 1, 1))
         deconv_layer.W.set_value(w)
         model.add(BatchNormalization(axis=1))
         model.add(Activation('relu'))
@@ -1191,7 +1167,7 @@ def mogan_learn_bw_grid(generator, discriminator, optimizer_fn,
         combined = v  # T.clip(m + alphas*v, 0., 1.)
         return rotate_by_multiple_of_90(combined, z_rot90)
 
-    grid_loss_weight = theano.shared(npi.cast[npi.float32](1))
+    grid_loss_weight = theano.shared(np.cast[np.float32](1))
 
     def grid_loss(g_outmap):
         g_out = g_outmap['output']
