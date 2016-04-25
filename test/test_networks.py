@@ -23,6 +23,29 @@ import pytest
 from deepdecoder.networks import *
 
 
+def test_norm_sin_cos_angle():
+    batch_shape = (64, 4)
+    input = Input(shape=batch_shape[1:])
+    output = NormSinCosAngle(idx=0)(input)
+    model = Model(input=input, output=output)
+    model.compile('adam', 'mse')
+    x = (5*np.random.sample(batch_shape)).astype(np.float32)
+    y = model.predict(x)
+    print(y.shape)
+    assert y.shape == x.shape
+    assert (y != x).any()
+
+    angle = np.random.uniform(-np.pi, np.pi, batch_shape)
+    s = np.sin(angle)
+    c = np.cos(angle)
+    np.testing.assert_allclose(s**2 + c**2, np.ones_like(s))
+
+    s = y[:, 0]
+    c = y[:, 1]
+    np.testing.assert_allclose(s**2 + c**2, np.ones_like(s, dtype=np.float32),
+                               rtol=1e-5, atol=1e-5)
+
+
 def test_get_offset_merge_mask():
     batch_shape = (64, 1, 16, 16)
     input = Input(shape=batch_shape[1:])

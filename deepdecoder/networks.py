@@ -610,15 +610,20 @@ class NormSinCosAngle(Layer):
         self.cos_idx = idx + 1
         super().__init__(**kwargs)
 
-    def get_output(self, x, mask=None):
-        sin = x[:, self.sin_idx]
-        cos = x[:, self.cos_idx]
-        eps = 1e7
-        scale = K.sqrt(1/(eps + sin**2 + cos**2))
-        sin = K.clip(scale*sin, -1, 1)
-        cos = K.clip(scale*cos, -1, 1)
-        return K.concatenate([x[:, :self.sin_idx], scale*sin, scale*cos,
+    def call(self, x, mask=None):
+        sin = x[:, self.sin_idx:self.sin_idx+1]
+        cos = x[:, self.cos_idx:self.cos_idx+1]
+        eps = 1e-7
+        scale = K.sqrt(1./(eps + sin**2 + cos**2))
+        sin_scaled = K.clip(scale*sin, -1, 1)
+        cos_scaled = K.clip(scale*cos, -1, 1)
+        return K.concatenate([x[:, :self.sin_idx], sin_scaled, cos_scaled,
                               x[:, self.cos_idx+1:]], axis=1)
+
+    def get_config(self):
+        config = {'idx': self.idx}
+        base_config = super().get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 def mask_blending_generator(
@@ -648,7 +653,7 @@ def mask_blending_generator(
         z_bits = Split(*z_for_bits, axis=1)(z)
         bits = get_bits(z_bits)
         driver = mask_driver(z_driver)
-        driver_norm = NormSinCosAngle(0)(driver)
+        driver_norm = NormSinCosAngle(0, name='driver_norm')(driver)
         mask_input = concat([bits, driver_norm], name='mask_gen_in')
         mask, mask_depth_map = mask_generator(mask_input)
 
