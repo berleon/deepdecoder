@@ -219,8 +219,9 @@ def test_mask_generator():
     model.compile('adam', 'mse')
     bs = (64, )
     x = np.random.sample(bs + shape)
-    y = np.random.sample(bs + (1, 64, 64))
-    model.train_on_batch(x, y)
+    y_depth_map = np.random.sample(bs + (1, 16, 16))
+    y_mask = np.random.sample(bs + (1, 64, 64))
+    model.train_on_batch(x, [y_mask, y_depth_map])
 
 
 def test_mask_blending_discriminator():
@@ -247,11 +248,18 @@ def test_mask_blending_generator():
         return Dense(nb_driver)(z)
 
     def mask_generator(x):
-        return sequential([
-            Dense(16*2),
-            Reshape((2, 4, 4)),
+        mask = sequential([
+            Dense(16),
+            Reshape((1, 4, 4)),
             UpSampling2D((16, 16))
         ])(x)
+
+        depth_map = sequential([
+            Dense(16),
+            Reshape((1, 4, 4)),
+            UpSampling2D((4, 4))
+        ])(x)
+        return mask, depth_map
 
     def merge_mask(subsample):
         def call(x):
