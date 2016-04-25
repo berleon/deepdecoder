@@ -151,7 +151,6 @@ def test_lecture_is_invariant_to_normalize():
 
         ids_denorm, config_denorm, structure_denorm = lecture.denormalize(
             ids_norm, config_norm, structure_norm)
-
         np.testing.assert_allclose(ids_denorm, ids)
         np.testing.assert_allclose(config_denorm, config)
         np.testing.assert_allclose(structure_denorm, structure)

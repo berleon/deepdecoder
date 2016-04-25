@@ -45,6 +45,12 @@ class Distribution:
     def normalize(self, array):
         return array
 
+    def denormalize(self, array):
+        return array
+
+    def get_normalized_shape(self, shape):
+        return shape
+
     def __eq__(self, other):
         return type(self) == type(other)
 
@@ -56,8 +62,14 @@ class Default(Distribution):
     def sample(self, shape):
         return self.distribution.sample(shape)
 
-    def normalize(self, shape):
-        return self.distribution.normalize(shape)
+    def normalize(self, array):
+        return self.distribution.normalize(array)
+
+    def denormalize(self, array):
+        return self.distribution.denormalize(array)
+
+    def get_normalized_shape(self, shape):
+        return self.distribution.get_normalized_shape(shape)
 
     def __eq__(self, other):
         return super().__eq__(other) and \
@@ -76,9 +88,11 @@ class Constant(Distribution):
     def sample(self, shape):
         return self.value*np.ones(shape)
 
-    def normalize(self, array):
-        return None
+    def denormalize(self, array):
+        return self.value*np.ones_like(array)
 
+    def get_normalized_shape(self, shape):
+        return shape[:-1] + (0,)
 
 class Normal(Distribution):
     def __init__(self, mean, std):
@@ -94,7 +108,10 @@ class Normal(Distribution):
             self.mean == other.mean and self.std == other.std
 
     def normalize(self, array):
-        return (array - self.mean) / (2*self.std)
+        return (array - self.mean) / self.std
+
+    def denormalize(self, array):
+        return array * self.std + self.mean
 
     def __neq__(self, other):
         return not self.__eq__(other)
@@ -122,6 +139,9 @@ class TruncNormal(Distribution):
     def normalize(self, array):
         return 2*(array - (self.mean + self.a)) / (self.b - self.a) - 1
 
+    def denormalize(self, array):
+        return (array + 1) * (self.b - self.a) / 2 + self.mean + self.a
+
     def __neq__(self, other):
         return not self.__eq__(other)
 
@@ -138,6 +158,14 @@ class SinCosAngleNorm(Distribution):
         c = np.cos(array)
         return np.concatenate([s, c], axis=-1)
 
+    def denormalize(self, array):
+        s = array[:, 0, np.newaxis]
+        c = array[:, 1, np.newaxis]
+        return np.arctan2(s, c)
+
+    def get_normalized_shape(self, shape):
+        return shape[:-1] + (2*shape[-1],)
+
 
 class Uniform(Distribution):
     def __init__(self, low, high):
@@ -152,7 +180,12 @@ class Uniform(Distribution):
             self.low == other.low and self.high == other.high
 
     def normalize(self, array):
-        return 2*(array - self.low) / (self.high - self.low) - 1
+        l, h = self.low, self.high
+        return 2*(array - l) / (h - l) - 1
+
+    def denormalize(self, array):
+        l, h = self.low, self.high
+        return (array + 1) * (h - l) / 2 + l
 
 
 class DiscretePoints(Distribution):
@@ -183,13 +216,17 @@ class Bernoulli(Distribution):
     def normalize(self, array):
         return 2*array - 1
 
+    def denormalize(self, array):
+        return (array + 1) / 2
+
 
 class Lecture:
     def __init__(self, pass_limit=0.01, name=''):
+        self.ids = Default(Bernoulli())
+
         self.z = Default(Zeros())
         self.x = Default(Zeros())
         self.y = Default(Zeros())
-        self.ids = Default(Bernoulli())
         self.center = Default(Normal(DISTRIBUTION_PARAMS.center.mean,
                                      DISTRIBUTION_PARAMS.center.std))
         self.radius = Default(Normal(DISTRIBUTION_PARAMS.radius.mean,
@@ -204,6 +241,20 @@ class Lecture:
         self.pass_limit = pass_limit
         self.name = name
 
+    @property
+    def structure_distributions(self):
+        return [
+            self.inner_ring_radius,
+            self.middle_ring_radius,
+            self.outer_ring_radius,
+            self.bulge_factor,
+            self.focal_length,
+        ]
+
+    @property
+    def config_distributions(self):
+        return [self.z, self.y, self.x, self.center, self.radius]
+
     @staticmethod
     def from_params(params, name=''):
         p = params
@@ -217,34 +268,70 @@ class Lecture:
         return lec
 
     def normalize(self, ids, config, structure):
-        def remove_nones(x):
-            return list(filter(lambda x: x is not None, x))
+        return (
+            self.normalize_ids(ids),
+            self.normalize_config(config),
+            self.normalize_structure(structure),
+        )
 
-        n_ids = self.ids.normalize(ids)
+    def normalize_ids(self, ids):
+        return self.ids.normalize(ids)
+
+    def normalize_config(self, config):
         n_rot_z = self.z.normalize(config[:, CONFIG_ROTS[0], np.newaxis])
         n_rot_y = self.y.normalize(config[:, CONFIG_ROTS[1], np.newaxis])
         n_rot_x = self.x.normalize(config[:, CONFIG_ROTS[2], np.newaxis])
         n_center = self.center.normalize(config[:, CONFIG_CENTER])
         n_radius = self.radius.normalize(config[:, CONFIG_RADIUS, np.newaxis])
-        n_config = np.concatenate(
+        return np.concatenate(
             [n_rot_z, n_rot_y, n_rot_x, n_center, n_radius], axis=1)
 
-        n_inner_ring_radius = self.inner_ring_radius.normalize(
-            structure[:, GRID_STRUCTURE_POS['inner_ring_radius']])
-        n_middle_ring_radius = self.middle_ring_radius.normalize(
-            structure[:, GRID_STRUCTURE_POS['middle_ring_radius']])
-        n_outer_ring_radius = self.outer_ring_radius.normalize(
-            structure[:, GRID_STRUCTURE_POS['outer_ring_radius']])
-        n_bulge_factor = self.bulge_factor.normalize(
-            structure[:, GRID_STRUCTURE_POS['bulge_factor']])
-        n_focal_length = self.focal_length.normalize(
-            structure[:, GRID_STRUCTURE_POS['focal_length']])
-        n_structure_list = [
-            n_inner_ring_radius, n_middle_ring_radius, n_outer_ring_radius,
-            n_bulge_factor, n_focal_length
+    def normalize_structure(self, structure):
+        n_structure_list = []
+        shape = (len(structure), 1)
+        for i, distribution in enumerate(self.structure_distributions):
+            if distribution.get_normalized_shape(shape)[-1] != 0:
+                n_structure_list.append(
+                    distribution.normalize(structure[:, i, np.newaxis]))
+        if len(n_structure_list) == 0:
+            return None
+        else:
+            return np.concatenate(n_structure_list, axis=1)
+
+    def _denormalize_array_by_dists(self, array, dists, consumes=None):
+        if consumes is None:
+            consumes = [1] * len(dists)
+
+        i = 0
+        denorm = []
+        for consume, dist in zip(consumes, dists):
+            shape = (len(array), consume)
+            norm_shape = dist.get_normalized_shape(shape)
+            offset = norm_shape[-1]
+            to = max(i+1, i+offset)
+            denorm.append(dist.denormalize(array[:, i:to]))
+            i += offset
+        return np.concatenate(denorm, axis=1)
+
+    def denormalize_ids(self, ids):
+        return self.ids.denormalize(ids)
+
+    def denormalize_config(self, config):
+        return self._denormalize_array_by_dists(
+            config, self.config_distributions, [1, 1, 1, 2, 1])
+
+    def denormalize_structure(self, structure):
+        return self._denormalize_array_by_dists(
+            structure, self.structure_distributions)
+
+    def denormalize(self, ids, config, structure=None):
+        if structure is None:
+            structure = np.zeros_like(config)
+        return [
+            self.denormalize_ids(ids),
+            self.denormalize_config(config),
+            self.denormalize_structure(structure),
         ]
-        n_structure = np.stack(remove_nones(n_structure_list), axis=-1)
-        return n_ids, n_config, n_structure
 
     def grid_params(self, batch_size):
         col_shape = (batch_size, 1)
@@ -265,7 +352,6 @@ class Lecture:
         structure = np.concatenate(
             [inner_ring_radius, middle_ring_radius, outer_ring_radius,
              bulge_factor, focal_length], axis=1)
-
         return ids, config, structure
 
     def has_passed(self, mse):
