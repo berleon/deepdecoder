@@ -67,4 +67,5 @@ class GTEvaluator:
         for i, label in enumerate(CONFIG_LABELS):
             name = 'mse_{}'.format(label)
             results[name] = mse(configs_pred[:, i], configs_true[:, i]).mean()
-        return results
+
+        return {k: float(v) for k, v in results.items()}

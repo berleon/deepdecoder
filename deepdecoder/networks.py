@@ -45,7 +45,8 @@ def get_decoder_model(
         input,
         nb_units,
         nb_output=NUM_MIDDLE_CELLS + NUM_CONFIGS,
-        depth=1):
+        depth=1,
+        dense=[]):
     n = nb_units
     d = depth
     return sequential([
@@ -56,7 +57,10 @@ def get_decoder_model(
         conv(8*n, depth=d),
         MaxPooling2D(),  # 8x8
         conv(8*n, depth=d),
+        MaxPooling2D(),  # 4x4
+        conv(8*n, depth=d),
         Flatten(),
+        [Dense(d, activation='relu') for d in dense],
         Dense(nb_output)
     ])(input)
 
