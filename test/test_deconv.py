@@ -64,11 +64,9 @@ def test_deconv_dcgan():
 
 @pytest.mark.skipif(not on_gpu(), reason="only works with cuda")
 def test_deconvolution2d():
-    model = Sequential()
-    model.add(Deconvolution2D(10, 3, 3, subsample=(2, 2),
-                              input_shape=(1, 16, 16)))
-    out = model.get_output()
-    fn = theano.function([model.input], out)
+    x = Input(shape=(1, 16, 16))
+    out = Deconvolution2D(10, 3, 3, subsample=(2, 2))(x)
+    fn = theano.function([x], out)
     img = np.random.sample((64, 1, 16, 16)).astype(np.float32)
     deconv_out = fn(img)
     assert deconv_out.shape == (64, 10, 32, 32)
