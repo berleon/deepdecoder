@@ -108,7 +108,6 @@ def main(nb_units, depth, nb_epoch, filter_size, project_factor, nb_dense):
     def clip(x):
         return np.clip(x, 0, 1)
 
-
     zip_visualise_tiles(clip(masks),
                         clip(predict_masks), show=False)
     plt.savefig(output_dir + "predict_tags.png")

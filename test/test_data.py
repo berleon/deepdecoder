@@ -15,7 +15,7 @@
 from math import pi
 import numpy as np
 from itertools import islice
-from deepdecoder.data import normalize_angle, bins_for_z, gen_diff_gan
+from deepdecoder.data import normalize_angle, bins_for_z
 from beesgrid import NUM_MIDDLE_CELLS, CONFIG_ROTS
 
 
@@ -39,10 +39,3 @@ def test_data_bins_for_z():
     assert (bins.astype(np.int) == bins).all()
     assert (0 <= bins).all() and (bins <= 3).all()
     assert (abs(pi/2*bins - z_norm) <= pi / 4).all()
-
-
-def test_data_gen_diff_gan():
-    for batch in islice(gen_diff_gan(), 1):
-        z_idx = NUM_MIDDLE_CELLS + CONFIG_ROTS[0]
-        z = batch.params[:, z_idx]
-        assert (z <= pi / 4).all()

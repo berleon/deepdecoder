@@ -28,7 +28,7 @@ import keras.backend as K
 
 from beras.layers.attention import RotationTransformer
 from beras.util import sequential, concat, collect_layers, load_weights, \
-    namespace, rename_layer
+    namespace, name_tensor
 from beras.regularizers import with_regularizer
 from beras.layers.core import Split, ZeroGradient, LinearInBounds
 
@@ -37,8 +37,7 @@ from beesgrid import NUM_MIDDLE_CELLS, NUM_CONFIGS
 from deepdecoder.deconv import Deconvolution2D
 from deepdecoder.keras_fix import Convolution2D as TheanoConvolution2D
 from deepdecoder.transform import PyramidBlending, PyramidReduce, \
-    AddLighting, Selection, GaussianBlur, HighFrequencies, \
-    LowFrequenciesRegularizer
+    AddLighting, Selection, GaussianBlur, HighPass
 
 
 def get_decoder_model(
@@ -47,6 +46,12 @@ def get_decoder_model(
         nb_output=NUM_MIDDLE_CELLS + NUM_CONFIGS,
         depth=1,
         dense=[]):
+    def dense_bn(n):
+        return [
+            Dense(n),
+            BatchNormalization(),
+            Activation('relu')
+        ]
     n = nb_units
     d = depth
     return sequential([
@@ -54,13 +59,13 @@ def get_decoder_model(
         MaxPooling2D(),  # 32x32
         conv(2*n, depth=d),
         MaxPooling2D(),  # 16x16
-        conv(8*n, depth=d),
+        conv(4*n, depth=d),
         MaxPooling2D(),  # 8x8
         conv(8*n, depth=d),
         MaxPooling2D(),  # 4x4
-        conv(8*n, depth=d),
+        conv(16*n, depth=d),
         Flatten(),
-        [Dense(d, activation='relu') for d in dense],
+        [dense_bn(d) for d in dense],
         Dense(nb_output)
     ])(input)
 
@@ -389,7 +394,7 @@ def get_mask_weight_blending(inputs, min=0, max=2):
         Convolution2D(1, 3, 3),
         Flatten(),
         Dense(1),
-        LinearInBounds(K.variable(min), K.variable(2), clip=True),
+        LinearInBounds(min, max, clip=True),
     ], ns='mask_weight_blending')(input)
 
 
@@ -423,7 +428,7 @@ def get_mask_postprocess(inputs, nb_units):
     return sequential([
         conv(n, 3, 3),
         conv(n, 3, 3),
-        Convolution2D(1, 5, 5, border_mode='same', init=normal(scale=0.1)),
+        Convolution2D(1, 5, 5, border_mode='same', init='normal'),
     ], ns='mask_post')(concat(inputs))
 
 
@@ -469,7 +474,7 @@ class NormSinCosAngle(Layer):
                               x[:, self.cos_idx+1:]], axis=1)
 
     def get_config(self):
-        config = {'idx': self.idx}
+        config = {'idx': self.sin_idx}
         base_config = super().get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
@@ -502,7 +507,8 @@ def mask_blending_generator(
         bits = get_bits(z_bits)
         driver = mask_driver(z_driver)
         driver_norm = NormSinCosAngle(0, name='driver_norm')(driver)
-        mask_input = concat([bits, driver_norm], name='mask_gen_in')
+        mask_input = concat([bits, driver_norm], name='mask_gen_input')
+
         mask, mask_depth_map = mask_generator(mask_input)
 
         if mask_generator_weights:
@@ -510,8 +516,8 @@ def mask_blending_generator(
             load_weights(mask_layers, mask_generator_weights,
                          nb_input_layers=1)
 
-        rename_layer(mask, 'mask')
-        rename_layer(mask_depth_map, 'mask_depth_map')
+        mask = name_tensor(mask, 'mask')
+        mask_depth_map = name_tensor(mask_depth_map, 'mask_depth_map')
 
         selection = with_regularizer(Selection(threshold=-0.08,
                                                smooth_threshold=0.2,
@@ -538,7 +544,6 @@ def mask_blending_generator(
         offset_back_feature_map, out_offset_back = offset_back(
             [out_offset_middle, offset_merge_mask32(mask_down)])
 
-        #mask_weight32 = mask_weight_blending32(out_offset_middle)
         mask_weight64 = mask_weight_blending64(out_offset_middle)
 
         blending = PyramidBlending(offset_pyramid_layers=2,
@@ -554,8 +559,8 @@ def mask_blending_generator(
         mask_post = mask_postprocess(
             [blending, mask_selection, mask, out_offset_back,
              offset_back_feature_map] + light_outs)
-        rename_layer(mask_post, 'mask_post')
-        mask_post_high = HighFrequencies(4, nb_steps=4,
+        mask_post = name_tensor(mask_post, 'mask_post')
+        mask_post_high = HighPass(4, nb_steps=4,
                                          name='mask_post_high')(mask_post)
         blending_post = merge([mask_post_high, blending], mode='sum',
                               name='blending_post')

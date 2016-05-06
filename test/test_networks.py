@@ -17,7 +17,7 @@ from keras.models import Model
 from keras.layers.core import Dense, Flatten, Reshape
 from keras.layers.convolutional import Convolution2D, UpSampling2D, \
     MaxPooling2D
-from keras.engine.topology import Input
+from keras.engine.topology import Input, Container
 from keras.optimizers import Adam
 from beras.gan import GAN, gan_binary_crossentropy, gan_outputs
 import pytest
@@ -38,7 +38,7 @@ from deepdecoder.blending_gan import lecture
 def test_decoder_model():
     image_size = 64
     x = Input(shape=(1, image_size, image_size))
-    out = get_decoder_model(x, nb_units=8,
+    out = get_decoder_model(x, nb_units=16,
                             nb_output=NUM_MIDDLE_CELLS + NUM_CONFIGS + 1)
     model = Model(x, out)
     gt_dir = '/home/leon/repos/deeplocalizer_data/images/season_2015'
@@ -52,7 +52,8 @@ def test_decoder_model():
 
     print("config: {}, {}".format(config_norm.max(), config_norm.min()))
     model.compile('adam', 'mse')
-    model.fit(gt, np.concatenate([ids_norm, config_norm], axis=1), nb_epoch=50)
+    model.fit(gt, np.concatenate([ids_norm, config_norm], axis=1),
+              nb_epoch=100)
     evaluator = GTEvaluator(gt_files)
 
     def predict(x):
@@ -303,7 +304,7 @@ def test_mask_blending_generator():
             Dense(1),
         ])(x)
 
-    def discriminator(x):
+    def discriminator_fn(x):
         return gan_outputs(sequential([
             Flatten(),
             Dense(1),
@@ -330,12 +331,20 @@ def test_mask_blending_generator():
     )
     z_shape = (32, )
     real_shape = (1, 64, 64)
-    gan = GAN(gen, discriminator, z_shape, real_shape)
+    z = Input(shape=z_shape, name='z')
+    fake = Input(shape=real_shape, name='fake')
+    real = Input(shape=real_shape, name='real')
+    generator = Container([z], gen([z]))
+    discriminator = Container([fake, real], discriminator_fn([fake, real]))
+    gan = GAN(generator, discriminator, z_shape, real_shape)
     gan.build(Adam(), Adam(), gan_binary_crossentropy)
-    for l in gan.gen_layers:
+    for l in gan.generator.layers:
         print("{}: {}, {}".format(
             l.name, l.output_shape, getattr(l, 'regularizers', [])))
     bs = 10
     z_in = np.random.sample((bs,) + z_shape)
+    real_in = np.random.sample((bs,) + real_shape)
     gan.compile_generate()
     gan.generate({'z': z_in})
+    fn = gan.compile_custom_layers(['fake', 'mask', 'mask_with_lighting'])
+    fn({'z': z_in, 'real': real_in})

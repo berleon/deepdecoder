@@ -18,13 +18,14 @@ import theano
 from keras.models import Sequential
 from keras.layers.convolutional import Convolution2D
 
+from keras.engine.topology import Input
 from keras.layers.normalization import BatchNormalization
 from keras.layers.core import Dense, Flatten, Reshape, Activation, \
     Layer
 
 from beras.layers.core import Split, ZeroGradient, LinearInBounds
 
-from deepdecoder.deconv import Deconvolution2D, Deconv2DVariableWeights
+from deepdecoder.deconv import Deconvolution2D
 import numpy as np
 import theano.tensor as T
 import pytest
@@ -89,25 +90,4 @@ def test_deconvolution2d_with_conv2d_gpu_contiguous():
     model.compile('sgd', 'mse')
 
     img = np.random.sample((64, 1, 16, 16)).astype(np.float32)
-    model.predict(img)
-
-
-@pytest.mark.skipif(not on_gpu(), reason="only works with cuda")
-def test_deconvolution2d_variable():
-    input_dim = 20
-    z_shape = (64, input_dim)
-    model = Sequential()
-    z = Layer(input_shape=(input_dim,))
-    model = Sequential()
-    model.add(z)
-    model.add(Dense(8*4*4))
-    model.add(Reshape((8, 4, 4,)))
-    model.add(Activation('relu'))
-    model.add(Deconv2DVariableWeights(z, 8, 3, 3, subsample=(1, 1),
-                                      border_mode=(1, 1)))
-    model.add(BatchNormalization(axis=1))
-    model.add(Activation('relu'))
-    model.compile('sgd', 'mse')
-
-    img = np.random.uniform(-1, 1, z_shape).astype(np.float32)
     model.predict(img)

@@ -34,9 +34,9 @@ def pyramid_expand(image, sigma=2/3):
     return upsample(image, sigma)
 
 
-def pyramid_reduce(image, sigma=None, scale=2):
+def pyramid_reduce(image, sigma=None, scale=0.5):
     if sigma is None:
-        sigma = scale*2 / 6
+        sigma = (1/scale)*2 / 6
     return resize_interpolate(gaussian_filter_2d(image, sigma), scale=scale)
 
 
@@ -140,13 +140,13 @@ class PyramidBlendingGridIdx(Layer):
 
 
 class PyramidReduce(Layer):
-    def __init__(self, scale=2, **kwargs):
+    def __init__(self, scale=0.5, **kwargs):
         self.scale = scale
         super().__init__(**kwargs)
 
     def get_output_shape_for(self, input_shape):
         shp = input_shape
-        return shp[:2] + (shp[2] // self.scale, shp[3] // self.scale)
+        return shp[:2] + (shp[2] * self.scale, shp[3] * self.scale)
 
     def call(self, x, mask=None):
         return pyramid_reduce(x, scale=self.scale)
@@ -163,6 +163,13 @@ class GaussianBlur(Layer):
         return gaussian_filter_2d(x, self.sigma,
                                   window_radius=self.window_radius)
 
+    def get_config(self):
+        config = {
+            'sigma': self.sigma,
+            'window_radius': self.window_radius,
+        }
+        base_config = super(GaussianBlur, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 class UpsampleInterpolate(Layer):
     def __init__(self, scale, **kwargs):
@@ -174,7 +181,14 @@ class UpsampleInterpolate(Layer):
         return bs, c, int(h*self.scale), int(w*self.scale)
 
     def call(self, x, mask=None):
-        return resize_interpolate(x, scale=1/self.scale)
+        return resize_interpolate(x, scale=self.scale)
+
+    def get_config(self):
+        config = {
+            'scale': self.scale,
+        }
+        base_config = super(UpsampleInterpolate, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class Selection(Layer):
@@ -194,6 +208,15 @@ class Selection(Layer):
                            'float32')
         selection = gaussian_filter_2d(selection, sigma=2/3)
         return selection
+
+    def get_config(self):
+        config = {
+            'sigma': self.sigma,
+            'threshold': float(K.get_value(self.threshold)),
+            'smooth_threshold': float(K.get_value(self.smooth_threshold)),
+        }
+        base_config = super(Selection, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class AddLighting(Layer):
@@ -225,38 +248,16 @@ class AddLighting(Layer):
         scaled = black_scaled + white_scaled
         return scaled + self.shift_factor*shift
 
-
-class LowFrequenciesRegularizer(Regularizer):
-    def __init__(self, sigma, factor=1):
-        self.sigma = sigma
-        self.factor = factor
-        self.uses_learning_phase = True
-
-    def set_layer(self, layer):
-        self.layer = layer
-
-    def __call__(self, loss):
-        if not hasattr(self, 'layer'):
-            raise Exception('Need to call `set_layer` on '
-                            'LowFrequenciesRegularizer instance '
-                            'before calling the instance. ')
-        regularized_loss = K.zeros_like(loss)
-        print(self.layer.inbound_nodes)
-        for i in range(len(self.layer.inbound_nodes)):
-            print(i)
-            out = self.layer.get_output_at(i)
-            low_freq = gaussian_filter_2d(out, self.sigma)
-            regularized_loss += K.sum(K.abs(low_freq)) * self.factor
-        print(regularized_loss)
-        return K.in_train_phase(loss + regularized_loss, loss)
-
     def get_config(self):
-        return {'name': self.__class__.__name__,
-                'sigma': self.sigma,
-                'factor': self.factor}
+        config = {
+            'scale_factor': float(K.get_value(self.scale_factor)),
+            'shift_factor': float(K.get_value(self.shift_factor)),
+        }
+        base_config = super(AddLighting, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
-class HighFrequencies(Layer):
+class HighPass(Layer):
     def __init__(self, sigma, nb_steps, **kwargs):
         super().__init__(**kwargs)
         self.sigma = sigma
@@ -267,6 +268,14 @@ class HighFrequencies(Layer):
             lambda x: x - gaussian_filter_2d(x, self.sigma),
             outputs_info=x, n_steps=self.nb_steps)
         return high[-1]
+
+    def get_config(self):
+        config = {
+            'sigma': self.sigma,
+            'nb_steps': float(K.get_value(self.nb_steps)),
+        }
+        base_config = super(HighPass, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
 
 class PyramidBlending(Layer):
@@ -378,3 +387,23 @@ class PyramidBlending(Layer):
             img = upsample(img) + high
 
         return img
+
+    def get_config(self):
+        def to_builtin(x):
+            if hasattr(x, 'get_value'):
+                return float(x.get_value())
+            else:
+                return x
+
+        def to_buildin_list(xs):
+            return list(map(to_builtin, xs))
+
+        config = {
+            'offset_pyramid_layers': self.offset_pyramid_layers,
+            'mask_pyramid_layers': self.mask_pyramid_layers,
+            'offset_weights': to_buildin_list(self.offset_weights),
+            'mask_weights': to_buildin_list(self.mask_weights),
+            'use_selection': self.use_selection,
+        }
+        base_config = super(PyramidBlending, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
