@@ -40,7 +40,7 @@ def generator(fname, batch_size):
     i = 0
     tags = f['fakes']
     score = f['discriminator']
-    params = f['mask_gen_in']
+    params = f['mask_gen_input']
     nb_samples = len(tags)
     nb_to_choose = 2*batch_size
     start = nb_samples - 20*batch_size
@@ -90,17 +90,17 @@ def weight_mse(class_weights):
     return wrapper
 
 
-def main(nb_units, depth, nb_epoch, dense_units):
-    h5_fname = "/home/leon/data/300.hdf5"
+def main(base_output_dir, hdf5_fname, nb_units, depth, nb_epoch, dense_units):
     batch_size = 64
-    output_dir = "models/decoder_n{}_depth{}_dense{}_e{}/" \
+    label = "decoder_n{}_depth{}_dense{}_e{}/" \
         .format(nb_units, depth, "_".join(map(str, dense_units)), nb_epoch)
+    output_dir = os.path.join(base_output_dir, label)
+    print("Creating output dir: {}".format(output_dir))
+    os.makedirs(output_dir)
     gt_dir = '/home/leon/repos/deeplocalizer_data/images/season_2015'
     gt_files = get_gt_files_in_dir(gt_dir)
     validate_cb = ValidationCB(gt_files)
-    print("Creating output dir: {}".format(output_dir))
-    os.makedirs(output_dir)
-    gen = generator(h5_fname, batch_size)
+    gen = generator(hdf5_fname, batch_size)
     nb_output = next(gen)[1].shape[1]
     print(nb_output)
     x = Input(shape=(1, 64, 64))
@@ -108,7 +108,7 @@ def main(nb_units, depth, nb_epoch, dense_units):
                                        nb_output=nb_output, dense=dense_units)
     decoder = Model(x, [decoded_params])
 
-    with open(output_dir + 'decoder.json', 'w+') as f:
+    with open(os.path.join(output_dir, 'decoder.json'), 'w+') as f:
         f.write(decoder.to_json())
 
     optimizer = Adam()
@@ -119,19 +119,23 @@ def main(nb_units, depth, nb_epoch, dense_units):
         optimizer, 'loss', epoch_patience=4, min_improvment=0.0002)
     history = HistoryPerBatch()
     save = SaveModels({'{epoch:^03}_decoder.hdf5': decoder},
-                      output_dir=output_dir)
+                      output_dir=output_dir, every_epoch=25)
     decoder.fit_generator(
         gen, samples_per_epoch=200*batch_size, nb_epoch=nb_epoch, verbose=1,
         callbacks=[scheduler, save, validate_cb])
 
-    decoder.save_weights(output_dir + "decoder.hdf5", overwrite=True)
-
-    with open(output_dir + 'history.json', 'w+') as f:
+    decoder.save_weights(os.path.join(output_dir, "decoder.hdf5"),
+                         overwrite=True)
+    with open(os.path.join(output_dir, 'history.json'), 'w+') as f:
         json.dump(history.history, f)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='Train the decoder generator network')
+    parser.add_argument('--output-dir', type=str,
+                        help='output directory.')
+    parser.add_argument('--tags', type=str,
+                        help='hdf5 file with the generated tags and labels.')
     parser.add_argument('--units', default=16, type=int,
                         help='number of units in the layer.')
     parser.add_argument('--depth', default=2, type=int,
@@ -142,4 +146,6 @@ if __name__ == "__main__":
                         help='comma separated list')
     args = parser.parse_args()
     dense_units = [int(s) for s in args.dense_units.split(',')]
-    main(args.units, args.depth, args.epoch, dense_units)
+    assert os.path.exists(args.output_dir)
+    main(args.output_dir, args.tags, args.units, args.depth,
+         args.epoch, dense_units)

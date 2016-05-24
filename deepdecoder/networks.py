@@ -27,7 +27,7 @@ from keras.engine.topology import merge
 import keras.backend as K
 
 from beras.layers.attention import RotationTransformer
-from beras.util import sequential, concat, collect_layers, load_weights, \
+from beras.util import sequential, concat, collect_layers, \
     namespace, name_tensor
 from beras.regularizers import with_regularizer
 from beras.layers.core import Split, ZeroGradient, LinearInBounds
@@ -495,8 +495,7 @@ def mask_blending_generator(
         mask_postprocess,
         z_for_bits,
         z_for_driver,
-        z_for_offset,
-        mask_generator_weights=None,
+        z_for_offset
         ):
 
     def generator(inputs):
@@ -510,11 +509,6 @@ def mask_blending_generator(
         mask_input = concat([bits, driver_norm], name='mask_gen_input')
 
         mask, mask_depth_map = mask_generator(mask_input)
-
-        if mask_generator_weights:
-            mask_layers = collect_layers(mask_input, [mask, mask_depth_map])
-            load_weights(mask_layers, mask_generator_weights,
-                         nb_input_layers=1)
 
         mask = name_tensor(mask, 'mask')
         mask_depth_map = name_tensor(mask_depth_map, 'mask_depth_map')
@@ -545,7 +539,6 @@ def mask_blending_generator(
             [out_offset_middle, offset_merge_mask32(mask_down)])
 
         mask_weight64 = mask_weight_blending64(out_offset_middle)
-
         blending = PyramidBlending(offset_pyramid_layers=2,
                                    mask_pyramid_layers=2,
                                    mask_weights=['variable', 1],

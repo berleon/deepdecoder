@@ -41,10 +41,12 @@ def main(output_dir, nb_gen_units, nb_dis_units):
     blending_gan = BlendingGANExperiment(gan, output_dir)
     # blending_gan.save_real_images()
     blending_gan.compile_visualise()
-    blending_gan.vis(fname=blending_gan.add_output_dir('test.png'))
+    blending_gan.visualise(fname=blending_gan.add_output_dir('test.png'))
     blending_gan.compile()
-    blending_gan.train(20)
-    blending_gan.vis(fname=blending_gan.add_output_dir('after_20.png'))
+    blending_gan.train(301)
+    blending_gan.visualise(fname=blending_gan.add_output_dir('end.png'))
+    blending_gan.compile_sample()
+    blending_gan.sample(301, 10000)
 
 
 if __name__ == "__main__":
