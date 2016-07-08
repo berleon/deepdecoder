@@ -14,9 +14,9 @@
 
 from math import pi
 import numpy as np
-from itertools import islice
-from deepdecoder.data import normalize_angle, bins_for_z
-from beesgrid import NUM_MIDDLE_CELLS, CONFIG_ROTS
+from deepdecoder.data import normalize_angle, bins_for_z, generated_3d_tags
+from beesgrid import BlackWhiteArtist
+from pipeline.distributions import examplary_tag_distribution, DistributionCollection
 
 
 def test_data_normalize_angle():
@@ -39,3 +39,13 @@ def test_data_bins_for_z():
     assert (bins.astype(np.int) == bins).all()
     assert (0 <= bins).all() and (bins <= 3).all()
     assert (abs(pi/2*bins - z_norm) <= pi / 4).all()
+
+
+def test_generated_3d_tags():
+    artist = BlackWhiteArtist(0, 255, 0, 1)
+    label_dist = DistributionCollection(examplary_tag_distribution())
+    bs = 8
+    labels, grids = generated_3d_tags(label_dist, batch_size=128, artist=artist)
+    assert grids.shape == (bs, 1, 64, 64)
+    for label_key in labels.dtype.names:
+        assert label_key in label_dist.keys
