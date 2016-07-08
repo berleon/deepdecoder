@@ -1,11 +1,23 @@
 #! /usr/bin/env python3
+# Copyright 2016 Leon Sixt
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
 from deepdecoder.data import generator_3d_tags_with_depth_map
-from pipeline.distributions import to_radians, Uniform, Constant, TruncNormal, \
-    examplary_tag_distribution, DistributionCollection
 from beras.transform import tile
 import matplotlib.pyplot as plt
 import os
@@ -15,22 +27,7 @@ from keras.utils.generic_utils import Progbar
 from scipy.ndimage.interpolation import zoom
 from scipy.ndimage.filters import gaussian_filter1d
 from scipy.misc import imsave
-
-
-def default_tag_distribution():
-    tag_dist_params = examplary_tag_distribution()
-    angle = to_radians(65)
-    tag_dist_params["x_rotation"] = TruncNormal(-angle, angle, 0, angle / 2)
-    tag_dist_params["y_rotation"] = TruncNormal(-angle, angle, 0, angle / 2)
-    tag_dist_params["radius"] = TruncNormal(22, 26, 24.0, 1.3)
-    tag_dist_params["center"] = (Uniform(-16, 16), 2)
-
-    tag_dist_params["bulge_factor"] = Uniform(0.4, 0.8)
-    tag_dist_params["focal_length"] = Uniform(2, 4)
-    tag_dist_params["inner_ring_radius"] = Uniform(0.42, 0.48)
-    tag_dist_params["middle_ring_radius"] = Constant(0.8)
-    tag_dist_params["outer_ring_radius"] = Constant(1.)
-    return DistributionCollection(tag_dist_params)
+from deepdecoder.scripts.default_3d_tags_distribution import default_tag_distribution
 
 
 def generator(tag_dist, batch_size, antialiasing=1):

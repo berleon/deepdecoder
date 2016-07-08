@@ -32,6 +32,8 @@ setup(
     entry_points={
               'console_scripts': [
                   'bb_generate_3d_tags = deepdecoder.scripts.generate_3d_tags:main',
+                  'bb_default_3d_tags_distribution = '
+                  'deepdecoder.scripts.default_3d_tags_distribution:main',
               ]
     },
     packages=[
