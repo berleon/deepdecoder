@@ -126,5 +126,6 @@ def main():
                         help='Number of samples to generate')
     args = parser.parse_args()
     run(args.dist, args.output, args.force, int(args.nb_samples))
+
 if __name__ == "__main__":
     main()

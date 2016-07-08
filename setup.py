@@ -13,22 +13,29 @@
 # limitations under the License.
 
 from distutils.core import setup
+from pip.req import parse_requirements
 
-setup(name='deepdecoder',
-      version='0.0.1',
-      description='models for my bacheleor thesis',
-      author='Leon Sixt',
-      author_email='github@leon-sixt.de',
-      install_requires=[
-          "numpy>=1.9",
-          "keras>=0.3.0",
-          "pytest>=2.7.2",
-          "scikit-image>=0.11.3",
-          "seya",
-          "dotmap>=1.1.2",
-          "seaborn",
-          "more_itertools"
-      ],
-      packages=[
-          'deepdecoder',
-      ])
+
+install_reqs = parse_requirements('requirements.txt', session=False)
+reqs = [str(ir.req) for ir in install_reqs]
+dep_links = [str(req_line.url) for req_line in install_reqs]
+
+
+setup(
+    name='deepdecoder',
+    version='0.0.1',
+    description='models for my bacheleor thesis',
+    author='Leon Sixt',
+    author_email='github@leon-sixt.de',
+    install_requires=reqs,
+    dependency_links=dep_links,
+    entry_points={
+              'console_scripts': [
+                  'bb_generate_3d_tags = deepdecoder.scripts.generate_3d_tags:main',
+              ]
+    },
+    packages=[
+        'deepdecoder',
+        'deepdecoder.scripts',
+    ]
+)
