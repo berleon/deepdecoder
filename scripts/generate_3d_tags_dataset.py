@@ -75,8 +75,9 @@ def run(tag_dist, output_fname, force, nb_samples):
 
     for label_name in sorted(set(labels.dtype.names) - set(['bits'])):
         x = labels[label_name]
-        plt.hist(x, bins=40, normed=True)
+        plt.hist(x.flatten(), bins=40, normed=True)
         plt.savefig(hist_name.format(label_name))
+        plt.clf()
 
     f = h5py.File(output_fname, 'w')
     shape = (64, 64)
@@ -86,25 +87,31 @@ def run(tag_dist, output_fname, force, nb_samples):
                      chunks=(256, 1, 16, 16), compression='gzip')
     for label_name in labels.dtype.names:
         n_values = labels[label_name].shape[1]
-        print(label_name, n_values)
         f.create_dataset(label_name, shape=(nb_samples, n_values), dtype='float32',
                          chunks=(256, n_values), compression='gzip')
 
+    f.attrs['label_names'] = [l.encode('utf8') for l in labels.dtype.names]
+    print(f.attrs['label_names'])
     i = 0
     progbar = Progbar(nb_samples)
     batch_size = min(20000, nb_samples)
     for labels, tags, depth_map in generator(tag_dist, batch_size, antialiasing=4):
-        if i >= nb_samples:
+        size = min(i+batch_size, nb_samples) - i
+        if size == 0:
             break
-        f['tags'][i:i+batch_size] = tags
-        f['depth_map'][i:i+batch_size] = depth_map
+        f['tags'][i:i+size] = tags[:size]
+        f['depth_map'][i:i+size] = depth_map[:size]
         for label_name in labels.dtype.names:
-            print(label_name)
-            f[label_name][i:i+batch_size] = labels[label_name]
-        i += batch_size
+            f[label_name][i:i+size] = labels[label_name][:size]
+        i += size
         progbar.update(i)
 
     f.flush()
+    print("Saved images to: {}".format(output_fname))
+    dist_fname = basename + "_distribution.json"
+    with open(dist_fname, "w+") as f:
+        f.write(tag_dist.to_json())
+        print("Saved distribution to: {}".format(dist_fname))
 
 
 def main():
@@ -115,10 +122,9 @@ def main():
                         help='override existing output file')
     parser.add_argument('-d', '--dist', type=str, default=default_tag_distribution(),
                         help='Json params of the distribution')
-
-    parser.add_argument('-n', '--nb-samples', type=int, required=True,
+    parser.add_argument('-n', '--nb-samples', type=float, required=True,
                         help='Number of samples to generate')
     args = parser.parse_args()
-    run(args.dist, args.output, args.force, args.nb_samples)
+    run(args.dist, args.output, args.force, int(args.nb_samples))
 if __name__ == "__main__":
     main()

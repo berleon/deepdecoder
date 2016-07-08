@@ -13,26 +13,17 @@
 # limitations under the License.
 #
 
-from beesgrid import GridGenerator, MaskGridArtist, DepthMapArtist, \
-    draw_grids
+from beesgrid import MaskGridArtist, DepthMapArtist, draw_grids
 
-from math import pi
 import numpy as np
-import theano
-import itertools
 import h5py
 
 from beesgrid import MASK, BlackWhiteArtist
 from beras.data_utils import HDF5Tensor
 from itertools import count
-from skimage.transform import pyramid_reduce, \
-    pyramid_expand
 
 import scipy.ndimage.interpolation
 import scipy.ndimage
-from pipeline.distributions import DistributionCollection
-
-floatX = theano.config.floatX
 
 
 def np_binary_mask(mask, black=0., ignore=0.5,  white=1.):
@@ -40,11 +31,6 @@ def np_binary_mask(mask, black=0., ignore=0.5,  white=1.):
     bw[mask > MASK["IGNORE"]] = white
     bw[mask < MASK["IGNORE"]] = black
     return bw
-
-
-def nb_normalized_params(distribution=None):
-    ids, configs, structure, _ = next(grids_lecture_generator(batch_size=1, lecture=lecture))
-    return sum([a.shape[-1] for a in (ids, configs, structure)])
 
 
 def load_real_hdf5_tags(fname, batch_size):
