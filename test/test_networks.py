@@ -27,7 +27,7 @@ from beesgrid import get_gt_files_in_dir, gt_grids, NUM_MIDDLE_CELLS, \
 from beras.util import sequential, concat
 from deepdecoder.networks import mask_blending_generator, get_mask_driver, \
     get_lighting_generator, get_offset_merge_mask, get_mask_weight_blending, \
-    get_offset_back, get_offset_front, get_offset_middle, mask_generator, \
+    get_offset_back, get_offset_front, get_offset_middle, tag_3d_model_network, \
     mask_blending_discriminator, get_mask_postprocess, get_decoder_model, \
     NormSinCosAngle
 
@@ -215,7 +215,7 @@ def test_get_lighting_generator():
 def test_mask_generator():
     shape = (15, )
     input = Input(shape=shape)
-    output = mask_generator([input])
+    output = tag_3d_model_network([input])
     model = Model(input, output)
     model.compile('adam', 'mse')
     bs = (64, )
@@ -248,7 +248,7 @@ def test_mask_blending_generator():
     def driver(z):
         return Dense(nb_driver)(z)
 
-    def mask_generator(x):
+    def tag_3d_model_network(x):
         mask = sequential([
             Dense(16),
             Reshape((1, 4, 4)),
@@ -313,7 +313,7 @@ def test_mask_blending_generator():
 
     gen = mask_blending_generator(
         mask_driver=driver,
-        mask_generator=mask_generator,
+        tag_3d_model_network=tag_3d_model_network,
         light_merge_mask16=merge_mask(None),
         offset_merge_light16=merge_mask((4, 4)),
         offset_merge_mask16=merge_mask(None),

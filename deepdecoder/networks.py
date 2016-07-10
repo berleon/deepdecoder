@@ -120,10 +120,8 @@ class MinCoveredRegularizer(Regularizer):
         return K.in_train_phase(loss + reg_loss.mean(), loss)
 
 
-def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
-                   depth=2,
-                   nb_output_channels=1,
-                   trainable=True):
+def tag_3d_model_network_dense(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
+                               depth=2, nb_output_channels=1, trainable=True):
     n = nb_units
 
     def conv(n, repeats=1):
@@ -165,8 +163,9 @@ def mask_generator(input, nb_units=64, dense_factor=3, nb_dense_layers=2,
     return mask, depth_map
 
 
-def mask_generator_all_conv(input, nb_units=64, depth=2, filter_size=3):
+def tag_3d_network(input, nb_inputs, nb_units=64, depth=2, filter_size=3):
     n = nb_units
+
     def conv(n, repeats=1, f=None):
         if f is None:
             f = filter_size
@@ -178,7 +177,7 @@ def mask_generator_all_conv(input, nb_units=64, depth=2, filter_size=3):
         ]
 
     base = sequential([
-        Reshape((22, 1, 1,)),
+        Reshape((nb_inputs, 1, 1,)),
         conv(8*n, depth, f=1),
         UpSampling2D(),  # 2x2
         conv(8*n, depth, f=2),
@@ -197,50 +196,6 @@ def mask_generator_all_conv(input, nb_units=64, depth=2, filter_size=3):
         UpSampling2D(),  # 64x64
         conv(n, depth - 1),
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
-    ], ns='mask_gen.mask')(base)
-
-    depth_map = sequential([
-        conv(n // 2, depth - 1),
-        Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
-    ], ns='mask_gen.depth_map')(base)
-
-    return mask, depth_map
-
-def mask_generator_extra(input, nb_units=64, nb_dense=[256, 1024], depth=2,
-                         project_factor=1, filter_size=3):
-    n = nb_units
-    def conv(n, repeats=1):
-        return [
-            [
-                Convolution2D(n, filter_size, filter_size,
-                              border_mode='same', init='he_normal'),
-                Activation('relu')
-            ] for _ in range(repeats)
-        ]
-
-    dense_layers = []
-    for nb in nb_dense:
-        dense_layers.append(
-            Dense(nb, init='he_normal', activation='relu')
-        )
-    base = sequential(dense_layers + [
-        Dense(8*n*4*4*project_factor),
-        Activation('relu'),
-        Reshape((8*n*project_factor, 4, 4,)),
-        conv(8*n, depth),
-        UpSampling2D(),  # 8x8
-        conv(4*n, depth),
-        UpSampling2D(),  # 16x16
-        conv(2*n),
-    ], ns='mask_gen.base')(input)
-
-    mask = sequential([
-        conv(2*n, depth),
-        UpSampling2D(),  # 32x32
-        conv(n, depth),
-        UpSampling2D(),  # 64x64
-        conv(n, depth - 1),
-        Convolution2D(1, 5, 5, border_mode='same', init='he_normal'),
     ], ns='mask_gen.mask')(base)
 
     depth_map = sequential([
@@ -481,7 +436,7 @@ class NormSinCosAngle(Layer):
 
 def mask_blending_generator(
         mask_driver,
-        mask_generator,
+        tag_3d_model_network,
         light_merge_mask16,
         offset_merge_mask16,
         offset_merge_mask32,
@@ -508,7 +463,7 @@ def mask_blending_generator(
         driver_norm = NormSinCosAngle(0, name='driver_norm')(driver)
         mask_input = concat([bits, driver_norm], name='mask_gen_input')
 
-        mask, mask_depth_map = mask_generator(mask_input)
+        mask, mask_depth_map = tag_3d_model_network(mask_input)
 
         mask = name_tensor(mask, 'mask')
         mask_depth_map = name_tensor(mask_depth_map, 'mask_depth_map')

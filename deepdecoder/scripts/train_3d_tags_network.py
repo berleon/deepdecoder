@@ -1,0 +1,160 @@
+#! /usr/bin/env python
+# Copyright 2016 Leon Sixt
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import matplotlib
+matplotlib.use('Agg')  # noqa
+
+from deepdecoder.networks import tag_3d_network
+from deepdecoder.data import Tag3dDataset
+
+from beras.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
+    SaveModels
+from beras.util import collect_layers
+from beras.visualise import zip_tile
+
+from keras.models import Model
+from keras.optimizers import Adam
+from keras.objectives import mse
+from keras.regularizers import l1
+from keras.engine.topology import Input
+
+import numpy as np
+import scipy.misc
+import os
+import h5py
+import json
+import argparse
+import pylab
+import seaborn as sns  # noqa
+
+pylab.rcParams['figure.figsize'] = (20, 20)
+
+
+def weight_mse(weight):
+    def wrapper(x, y):
+        return weight*mse(x, y)
+    return wrapper
+
+
+def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
+        nb_epoch, filter_size, project_factor, nb_dense):
+    batch_size = 32
+    basename = "network_3d_tags_n{}_d{}_e{}".format(nb_units, depth, nb_epoch)
+    output_basename = os.path.join(output_dir, basename)
+
+    tag_dataset = Tag3dDataset(tags_3d_hdf5_fname)
+    use_l1_regularizer = False
+    weights_fname = output_basename + ".hdf5"
+    if os.path.exists(weights_fname) and not force:
+        raise OSError("File {} already exists. Use --force to override it")
+    elif os.path.exists(weights_fname) and force:
+        os.remove(weights_fname)
+    os.makedirs(output_dir, exist_ok=True)
+
+    gen = tag_dataset.iter(batch_size)
+    nb_input = next(gen)[0].shape[1]
+
+    x = Input(shape=(nb_input,))
+    mask, depth_map = tag_3d_network(x, nb_input, nb_units=nb_units, depth=depth,
+                                     filter_size=filter_size)
+    if use_l1_regularizer:
+        layers = collect_layers(x, [mask, depth_map])
+        for l in layers:
+            if hasattr(l, 'W_regularizer'):
+                l.W_regularizer = l1(0.001)
+            if hasattr(l, 'b_regularizer'):
+                l.b_regularizer = l1(0.001)
+    g = Model(x, [mask, depth_map])
+    optimizer = Adam()
+
+    tag_3d_more_weight = 5
+    total_pixels = tag_3d_more_weight*64**2 + 16**2
+    weight_depth_map = 16**2 / total_pixels
+    weight_mask = tag_3d_more_weight*64**2 / total_pixels
+    g.compile(optimizer, [weight_mse(weight_mask),
+                          weight_mse(weight_depth_map)])
+
+    scheduler = AutomaticLearningRateScheduler(
+        optimizer, 'loss', epoch_patience=4, min_improvment=0.0002)
+    history = HistoryPerBatch()
+    save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir)
+    g.fit_generator(gen, samples_per_epoch=200*batch_size,
+                    nb_epoch=nb_epoch, verbose=1, callbacks=[scheduler, save, history])
+
+    nb_visualize = 18**2
+    vis_labels, (tags_3d, depth_map) = next(tag_dataset.iter(nb_visualize))
+    predict_tags_3d, predict_depth_map = g.predict(vis_labels)
+
+    def save(fname, *args):
+        clipped = list(map(lambda x: np.clip(x, 0, 1)[:, 0], args))
+        print(clipped[0].shape)
+        tiled = zip_tile(*clipped)
+        print(tiled.shape)
+        scipy.misc.imsave(fname, tiled)
+
+    save(output_basename + "_predict_tags.png", tags_3d, predict_tags_3d)
+    save(output_basename + "_predict_depth_map.png", depth_map, predict_depth_map)
+
+    g.save_weights(weights_fname, overwrite=True)
+    f = h5py.File(weights_fname)
+    f.attrs['distribution'] = tag_dataset.f.attrs['distribution']
+    f.attrs['model'] = g.to_json().encode('utf-8')
+
+    with open(output_basename + '.json', 'w+') as f:
+        f.write(g.to_json())
+
+    with open(output_basename + '_loss_history.json', 'w+') as f:
+        json.dump(history.history, f)
+
+    fig, _ = history.plot()
+    fig.savefig(output_basename + "_loss.png")
+
+    print("Saved weights to: {}".format(weights_fname))
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Train the mask generator network')
+    parser.add_argument('--units', default=16, type=int,
+                        help='number of units in the layer.')
+    parser.add_argument('--depth', default=2, type=int,
+                        help='number of conv layers between upsampling.')
+    parser.add_argument('--epoch', default=400, type=int,
+                        help='number of epoch to train.')
+
+    parser.add_argument('--filter-size', default=3, type=int,
+                        help='filter size of the conv kernel.')
+    parser.add_argument('--project-factor', default=1, type=int,
+                        help='factor of the last dense layer')
+
+    parser.add_argument('--nb-dense', default="256,1024", type=str,
+                        help='comma separated list')
+    parser.add_argument('-f', '--force', action='store_true',
+                        help='override existing output files')
+    parser.add_argument('-t', '--3d-tags', type=str,
+                        help='path to the hdf5 file with the generated tags')
+    parser.add_argument('output', type=str, help='output directory')
+
+    args = parser.parse_args()
+    nb_dense = [int(s) for s in args.nb_dense.split(',')]
+    tags_3d_hdf5_fname = args.__dict__['3d_tags']
+    assert os.path.exists(tags_3d_hdf5_fname)
+
+    run(args.output, args.force, tags_3d_hdf5_fname, args.units, args.depth, args.epoch,
+        args.filter_size, args.project_factor, nb_dense)
+
+
+if __name__ == "__main__":
+    main()
