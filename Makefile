@@ -50,13 +50,13 @@ find_tags: find_tags_setting.json localizer_weights localizer_preprocessed_image
 
 
 build_real_dataset_hdf5 ="$(output_dir)/real_tags.hdf5"
-build_real_dataset: find_tags real_images build_real_dataset_settings.json
+build_real_dataset: find_tags real_images build_real_dataset_setting.json
 	rm -rf $(build_real_dataset_hdf5)
 	bb_build_tag_dataset \
              --out $(build_real_dataset_hdf5) \
-             --roi-size $(call get,roi_size,build_real_dataset_settings.json) \
-             --offset $(call get,offset,build_real_dataset_settings.json) \
-             --threshold $(call get,threshold,build_real_dataset_settings.json) \
+             --roi-size $(call get,roi_size,build_real_dataset_setting.json) \
+             --offset $(call get,offset,build_real_dataset_setting.json) \
+             --threshold $(call get,threshold,build_real_dataset_setting.json) \
              --image-pathfile real_images \
              $(call get,tags_position,find_tags) \
 
@@ -65,24 +65,32 @@ generate_3d_tags_distribution.json:
 
 
 generated_3d_tags_dir=$(output_dir)/generated_3d_tags/
-generate_3d_tags: generate_3d_tags_distribution.json
+generate_3d_tag_samples=$(call get,nb_samples,generate_3d_tags_settings.json)
+generate_3d_tags: generate_3d_tags_distribution.json generate_3d_tags_settings.json
 	bb_generate_3d_tags \
-		--nb-samples 5e6  \
+		--force \
+		--nb-samples $(generate_3d_tag_samples)  \
 		--dist generate_3d_tags_distribution.json \
 		$(generated_3d_tags_dir)/generated_3d_tags.hdf5
-	echo '{"generated_3d_tags": "$(generated_3d_tags_dir)/generated_3d_tags.hdf5"}' > generate_3d_tags
+	echo '{"path": "$(generated_3d_tags_dir)/generated_3d_tags.hdf5"}' > generate_3d_tags
 
 
-structure_model_dir = $(output_dir)/3d_object_model_network
-structure_model_weights = $(structure_model_dir)/generated_tag_network.hdf5
-structure_model_network = $(structure_model_dir)/generated_tag_network.json
-train_structure_model: generate_3d_tags
-	bb_train_mask_generator \
-		--units 24 \
-		--depth 2 \
-		--epoch 400 \
-		--nb-dense 256,1024 \
-		--output-dir $(structure_model_dir)
+network_3d_tag_dir = $(output_dir)/network_3d_tag
+n3d_units = $(call get,units,network_3d_tag_settings.json)
+n3d_depth = $(call get,depth,network_3d_tag_settings.json)
+n3d_epoch = $(call get,epoch,network_3d_tag_settings.json)
+n3d_weights =$(network_3d_tag_dir)/network_3d_tags_n$(n3d_units)_d$(n3d_depth)_e$(n3d_epoch).hdf5
+
+train_network_3d_tag: generate_3d_tags network_3d_tag_settings.json
+	bb_train_3d_tags_network \
+		--force \
+		--3d-tags $(call get,path,generate_3d_tags) \
+		--units $(n3d_units) \
+		--depth $(n3d_depth)\
+		--epoch $(n3d_epoch) \
+		$(network_3d_tag_dir)
+	test -e $(n3d_weights)
+	echo '{"weights_path": "$(n3d_weights)"}' > train_network_3d_tag
 
 train_render_gan: train_structure_model, build_real_dataset
 	bb_train_render_gan

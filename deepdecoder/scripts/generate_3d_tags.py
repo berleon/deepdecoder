@@ -17,7 +17,8 @@
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
-from deepdecoder.data import generator_3d_tags_with_depth_map
+from deepdecoder.data import generator_3d_tags_with_depth_map, Tag3dDataset
+import pipeline.distributions
 from beras.transform import tile
 import matplotlib.pyplot as plt
 import os
@@ -76,38 +77,24 @@ def run(tag_dist, output_fname, force, nb_samples):
         plt.savefig(hist_name.format(label_name))
         plt.clf()
 
-    f = h5py.File(output_fname, 'w')
-    shape = (64, 64)
-    f.create_dataset("tags", shape=(nb_samples, 1, shape[0], shape[1]), dtype='float32',
-                     chunks=(256, 1, shape[0], shape[1]), compression='gzip')
-    f.create_dataset("depth_map", shape=(nb_samples, 1, 16, 16), dtype='float32',
-                     chunks=(256, 1, 16, 16), compression='gzip')
-    for label_name in labels.dtype.names:
-        n_values = labels[label_name].shape[1]
-        f.create_dataset(label_name, shape=(nb_samples, n_values), dtype='float32',
-                         chunks=(256, n_values), compression='gzip')
+    dset = Tag3dDataset(output_fname, 'w')
 
-    f.attrs['label_names'] = [l.encode('utf8') for l in labels.dtype.names]
-    print(f.attrs['label_names'])
-    i = 0
+    label_sizes = {l: labels[l].shape[1] for l in labels.dtype.names}
+    dset.create_datasets(nb_samples, label_sizes)
+    dset.set_tag_distribution(tag_dist)
+
     progbar = Progbar(nb_samples)
     batch_size = min(20000, nb_samples)
     for labels, tags, depth_map in generator(tag_dist, batch_size, antialiasing=4):
-        size = min(i+batch_size, nb_samples) - i
-        if size == 0:
+        pos = dset.append(labels, tags, depth_map)
+        progbar.update(pos)
+        if pos == nb_samples:
             break
-        f['tags'][i:i+size] = tags[:size]
-        f['depth_map'][i:i+size] = depth_map[:size]
-        for label_name in labels.dtype.names:
-            f[label_name][i:i+size] = labels[label_name][:size]
-        i += size
-        progbar.update(i)
 
-    f.flush()
-    print("Saved images to: {}".format(output_fname))
+    print("Saved tag 3d dataset to: {}".format(output_fname))
     dist_fname = basename + "_distribution.json"
-    with open(dist_fname, "w+") as f:
-        f.write(tag_dist.to_json())
+    with open(dist_fname, "w+") as dist_f:
+        dist_f.write(tag_dist.to_json())
         print("Saved distribution to: {}".format(dist_fname))
 
 
@@ -116,13 +103,19 @@ def main():
         description='Generate images and depth maps from the 3d object model of the tag')
     parser.add_argument('output', type=str, help='output file name')
     parser.add_argument('-f', '--force', action='store_true',
-                        help='override existing output file')
+                        help='override existing output files')
     parser.add_argument('-d', '--dist', type=str, default=default_tag_distribution(),
                         help='Json params of the distribution')
     parser.add_argument('-n', '--nb-samples', type=float, required=True,
                         help='Number of samples to generate')
     args = parser.parse_args()
-    run(args.dist, args.output, args.force, int(args.nb_samples))
+    if type(args.dist) == str:
+        with open(args.dist) as f:
+            dist = pipeline.distributions.load_from_json(f.read())
+
+    else:
+        dist = args.dist
+    run(dist, args.output, args.force, int(args.nb_samples))
 
 if __name__ == "__main__":
     main()

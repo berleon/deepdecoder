@@ -18,10 +18,10 @@ from beesgrid import MaskGridArtist, DepthMapArtist, draw_grids
 import numpy as np
 import h5py
 
-from beesgrid import MASK, BlackWhiteArtist
+from beesgrid import MASK, BlackWhiteArtist, TAG_LABEL_NAMES
 from beras.data_utils import HDF5Tensor
 from itertools import count
-
+import pipeline.distributions
 import scipy.ndimage.interpolation
 import scipy.ndimage
 
@@ -108,3 +108,75 @@ def generated_3d_tags(tag_distribution, batch_size=128, artist=None, scale=1.):
     grids = draw_grids(labels, scales=[scale], artist=artist)
     assert len(grids) == 1
     return labels, grids[0]
+
+
+class SynthesisedDataset:
+    def __init__(self, fname, mode=None):
+        self.fname = fname
+        self.f = h5py.File(fname, mode)
+
+    def get_tag_distribution(self):
+        dist_json = self.f.attrs['distribution'].decode('utf-8')
+        return pipeline.distributions.load_from_json(dist_json)
+
+    def set_tag_distribution(self, distribution):
+        self.f.attrs['distribution'] = distribution.to_json().encode('utf8')
+        self.f.attrs['label_names'] = [l.encode('utf8') for l in distribution.names]
+
+    def get_label_names(self):
+        label_names = [l.decode('utf-8') for l in self.f.attrs['label_names']]
+        assert label_names == TAG_LABEL_NAMES
+
+
+class Tag3dDataset(SynthesisedDataset):
+    shape = (64, 64)
+
+    def __init__(self, fname, mode=None):
+        super().__init__(fname, mode)
+        self._append_pos = 0
+        self._max_samples = 0
+
+    def create_datasets(self, nb_samples, labels_size):
+        shape = self.shape
+        self.f.create_dataset("tags", shape=(nb_samples, 1, shape[0], shape[1]), dtype='float32',
+                              chunks=(256, 1, shape[0], shape[1]), compression='gzip')
+
+        self.f.create_dataset("depth_map", shape=(nb_samples, 1, 16, 16), dtype='float32',
+                              chunks=(256, 1, 16, 16), compression='gzip')
+
+        for label_name, size in labels_size.items():
+            self.f.create_dataset(label_name, shape=(nb_samples, size), dtype='float32',
+                                  chunks=(256, size), compression='gzip')
+        self._append_pos = 0
+        self._max_samples = nb_samples
+
+    def append(self, labels, tags, depth_map):
+        i = self._append_pos
+        batch_size = len(tags)
+        size = min(i+batch_size, self._max_samples) - i
+        if size == 0:
+            return i
+
+        self.f['tags'][i:i+size] = tags[:size]
+        self.f['depth_map'][i:i+size] = depth_map[:size]
+        for label_name in labels.dtype.names:
+            self.f[label_name][i:i+size] = labels[label_name][:size]
+
+        self._append_pos += size
+        return self._append_pos
+
+    def iter(self, batch_size):
+        i = 0
+        tags = self.f['tags']
+        depth_maps = self.f['depth_map']
+        nb_samples = len(tags)
+        while True:
+            masks = tags[i:i+batch_size]
+            depth_map = depth_maps[i:i+batch_size]
+            labels = []
+            for l in TAG_LABEL_NAMES:
+                labels.append(self.f[l][i:i+batch_size])
+            yield [np.concatenate(labels, axis=1), [masks, depth_map]]
+            i += batch_size
+            if i >= nb_samples - batch_size:
+                i = 0
