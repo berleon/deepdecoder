@@ -16,18 +16,16 @@
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
-from deepdecoder.networks import tag_3d_network
+from deepdecoder.networks import tag_3d_network_dense
 from deepdecoder.data import Tag3dDataset
 
 from beras.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
     SaveModels
-from beras.util import collect_layers
 from beras.visualise import zip_tile
 
 from keras.models import Model
 from keras.optimizers import Adam
 from keras.objectives import mse
-from keras.regularizers import l1
 from keras.engine.topology import Input
 
 import numpy as np
@@ -39,14 +37,6 @@ import argparse
 import pylab
 import seaborn as sns  # noqa
 
-pylab.rcParams['figure.figsize'] = (20, 20)
-
-
-def weight_mse(weight):
-    def wrapper(x, y):
-        return weight*mse(x, y)
-    return wrapper
-
 
 def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
         nb_epoch, filter_size, project_factor, nb_dense):
@@ -55,7 +45,7 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     output_basename = os.path.join(output_dir, basename)
 
     tag_dataset = Tag3dDataset(tags_3d_hdf5_fname)
-    use_l1_regularizer = False
+    print("Got {} images from the 3d model".format(tag_dataset.nb_samples()))
     weights_fname = output_basename + ".hdf5"
     if os.path.exists(weights_fname) and not force:
         raise OSError("File {} already exists. Use --force to override it")
@@ -67,45 +57,38 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     nb_input = next(gen)[0].shape[1]
 
     x = Input(shape=(nb_input,))
-    mask, depth_map = tag_3d_network(x, nb_input, nb_units=nb_units, depth=depth,
-                                     filter_size=filter_size)
-    if use_l1_regularizer:
-        layers = collect_layers(x, [mask, depth_map])
-        for l in layers:
-            if hasattr(l, 'W_regularizer'):
-                l.W_regularizer = l1(0.001)
-            if hasattr(l, 'b_regularizer'):
-                l.b_regularizer = l1(0.001)
+    mask, depth_map = tag_3d_network_dense(x, nb_units=nb_units, depth=depth,
+                                           nb_dense_units=nb_dense)
     g = Model(x, [mask, depth_map])
     optimizer = Adam()
 
-    tag_3d_more_weight = 5
+    tag_3d_more_weight = 3
     total_pixels = tag_3d_more_weight*64**2 + 16**2
     weight_depth_map = 16**2 / total_pixels
     weight_mask = tag_3d_more_weight*64**2 / total_pixels
-    g.compile(optimizer, [weight_mse(weight_mask),
-                          weight_mse(weight_depth_map)])
+    g.compile(optimizer, loss=['mse', 'mse'],
+              loss_weights=[weight_mask, weight_depth_map])
 
     scheduler = AutomaticLearningRateScheduler(
-        optimizer, 'loss', epoch_patience=4, min_improvment=0.0002)
+        optimizer, 'loss', epoch_patience=12, min_improvment=0.0002)
     history = HistoryPerBatch()
     save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir)
-    g.fit_generator(gen, samples_per_epoch=200*batch_size,
+    g.fit_generator(gen, samples_per_epoch=300*batch_size,
                     nb_epoch=nb_epoch, verbose=1, callbacks=[scheduler, save, history])
 
     nb_visualize = 18**2
     vis_labels, (tags_3d, depth_map) = next(tag_dataset.iter(nb_visualize))
     predict_tags_3d, predict_depth_map = g.predict(vis_labels)
 
-    def save(fname, *args):
+    def zip_and_save(fname, *args):
         clipped = list(map(lambda x: np.clip(x, 0, 1)[:, 0], args))
         print(clipped[0].shape)
         tiled = zip_tile(*clipped)
         print(tiled.shape)
         scipy.misc.imsave(fname, tiled)
 
-    save(output_basename + "_predict_tags.png", tags_3d, predict_tags_3d)
-    save(output_basename + "_predict_depth_map.png", depth_map, predict_depth_map)
+    zip_and_save(output_basename + "_predict_tags.png", tags_3d, predict_tags_3d)
+    zip_and_save(output_basename + "_predict_depth_map.png", depth_map, predict_depth_map)
 
     g.save_weights(weights_fname, overwrite=True)
     f = h5py.File(weights_fname)
@@ -118,7 +101,7 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     with open(output_basename + '_loss_history.json', 'w+') as f:
         json.dump(history.history, f)
 
-    fig, _ = history.plot()
+    fig, _ = history.plot(metrics='loss')
     fig.savefig(output_basename + "_loss.png")
 
     print("Saved weights to: {}".format(weights_fname))
