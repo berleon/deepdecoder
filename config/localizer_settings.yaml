@@ -1,0 +1,6 @@
+# Git repository with the weight files
+repo: https://github.com/nebw/saliency-localizer-models.git
+# Model weight file. Relative to the git repos
+weights: season_2015/saliency_weights-wobn
+# Model json file. Relative to the git repos
+model: season_2015/model.json

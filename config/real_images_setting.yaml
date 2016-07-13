@@ -1,0 +1,2 @@
+# load real images from this directory
+image_directory: /mnt/storage/leon/repos/deepdecoder/config/test_real_images
