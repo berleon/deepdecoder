@@ -191,7 +191,7 @@ class UpsampleInterpolate(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class Selection(Layer):
+class Segmentation(Layer):
     def __init__(self, threshold,
                  smooth_threshold,
                  sigma=1,
@@ -202,12 +202,12 @@ class Selection(Layer):
         super().__init__(**kwargs)
 
     def call(self, x, mask=None):
-        selection = K.cast(x < self.threshold, 'float32')
-        selection = gaussian_filter_2d(selection, sigma=self.sigma)
-        selection = K.cast(selection > self.smooth_threshold,
+        segmentation = K.cast(x < self.threshold, 'float32')
+        segmentation = gaussian_filter_2d(segmentation, sigma=self.sigma)
+        segmentation = K.cast(segmentation > self.smooth_threshold,
                            'float32')
-        selection = gaussian_filter_2d(selection, sigma=2/3)
-        return selection
+        segmentation = gaussian_filter_2d(segmentation, sigma=2/3)
+        return segmentation
 
     def get_config(self):
         config = {
@@ -215,7 +215,7 @@ class Selection(Layer):
             'threshold': float(K.get_value(self.threshold)),
             'smooth_threshold': float(K.get_value(self.smooth_threshold)),
         }
-        base_config = super(Selection, self).get_config()
+        base_config = super(Segmentation, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
 
@@ -338,7 +338,7 @@ class PyramidBlending(Layer):
             return [value] * (self.max_pyramid_layers - len(lst)) + lst
 
         nb_fix_inputs = 3
-        offset, mask, selection = inputs[:nb_fix_inputs]
+        offset, mask, segmentation = inputs[:nb_fix_inputs]
         mask = 2*mask - 1
 
         idx = nb_fix_inputs
@@ -354,7 +354,7 @@ class PyramidBlending(Layer):
             offset, self.offset_pyramid_layers))
         gauss_pyr_mask = list(pyramid_gaussian(mask, self.mask_pyramid_layers))
         gauss_pyr_select = list(pyramid_gaussian(
-            selection, self.mask_pyramid_layers))
+            segmentation, self.mask_pyramid_layers))
 
         pyr_select = fill(gauss_pyr_select, value=1)
 
@@ -368,7 +368,7 @@ class PyramidBlending(Layer):
         assert len({len(p) for p in pyramids}) == 1, \
             "Different pyramid heights"
 
-        for selection, use_selection, lap_in, lap_mask, offset_weight, \
+        for segmentation, use_selection, lap_in, lap_mask, offset_weight, \
                 mask_weight in zip(*pyramids):
 
             if lap_in is None:
@@ -376,8 +376,8 @@ class PyramidBlending(Layer):
             elif lap_mask is None:
                 lap_mask = K.zeros_like(lap_in)
             if use_selection:
-                blend = lap_in*selection*offset_weight + \
-                    lap_mask*(1 - selection)*mask_weight
+                blend = lap_in*segmentation*offset_weight + \
+                    lap_mask*(1 - segmentation)*mask_weight
             else:
                 blend = lap_in*offset_weight + lap_mask*mask_weight
             blend_pyr.append(blend)

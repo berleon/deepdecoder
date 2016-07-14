@@ -25,10 +25,10 @@ from beesgrid import get_gt_files_in_dir, gt_grids, NUM_MIDDLE_CELLS, \
     CONFIG_CENTER, NUM_CONFIGS
 
 from beras.util import sequential, concat
-from deepdecoder.networks import mask_blending_generator, get_mask_driver, \
-    get_lighting_generator, get_offset_merge_mask, get_mask_weight_blending, \
-    get_offset_back, get_offset_front, get_offset_middle, tag_3d_model_network, \
-    mask_blending_discriminator, get_mask_postprocess, get_decoder_model, \
+from deepdecoder.networks import render_gan_generator, get_label_generator, \
+    get_lighting_generator, get_offset_merge_mask, get_blur_factor, \
+    get_offset_back, get_offset_front, get_offset_middle, tag3d_network_dense, \
+    render_gan_discriminator, get_details, get_decoder_model, \
     NormSinCosAngle
 
 from deepdecoder.evaluate import GTEvaluator
@@ -115,7 +115,7 @@ def test_get_mask_driver():
     batch_shape = (64, 22)
     n = 50
     input = Input(shape=batch_shape[1:])
-    output = get_mask_driver(input, nb_units=n, nb_output_units=n)
+    output = get_label_generator(input, nb_units=n, nb_output_units=n)
     model = Model(input, output)
     model.compile('adam', 'mse')
     x = np.random.sample(batch_shape)
@@ -176,7 +176,7 @@ def test_get_mask_weight_blending():
     b_shape = (10, 32, 32)
     a_input = Input(shape=a_shape)
     b_input = Input(shape=b_shape)
-    output = get_mask_weight_blending([a_input, b_input])
+    output = get_blur_factor([a_input, b_input])
     model = Model([a_input, b_input], output)
     model.compile('adam', 'mse')
     bs = (64, )
@@ -215,7 +215,7 @@ def test_get_lighting_generator():
 def test_mask_generator():
     shape = (15, )
     input = Input(shape=shape)
-    output = tag_3d_model_network([input])
+    output = tag3d_network_dense([input])
     model = Model(input, output)
     model.compile('adam', 'mse')
     bs = (64, )
@@ -225,12 +225,12 @@ def test_mask_generator():
     model.train_on_batch(x, [y_mask, y_depth_map])
 
 
-def test_mask_blending_discriminator():
+def test_render_gan_discriminator():
     fake_shape = (10, 1, 64, 64)
     real_shape = (10, 1, 64, 64)
     fake = Input(batch_shape=fake_shape)
     real = Input(batch_shape=real_shape)
-    output = mask_blending_discriminator([fake, real])
+    output = render_gan_discriminator([fake, real])
     model = Model([fake, real], output)
     model.compile('adam', 'mse')
     f = np.random.sample(fake_shape)
@@ -242,13 +242,13 @@ def test_mask_blending_discriminator():
         model.train_on_batch([f, r], y)
 
 
-def test_mask_blending_generator():
+def test_render_gan_generator():
     nb_driver = 20
 
     def driver(z):
         return Dense(nb_driver)(z)
 
-    def tag_3d_model_network(x):
+    def tag3d_network_dense(x):
         mask = sequential([
             Dense(16),
             Reshape((1, 4, 4)),
@@ -311,9 +311,9 @@ def test_mask_blending_generator():
         ])(concat(x)), fake_for_gen=(0, 10), fake_for_dis=(0, 10),
                            real=(10, 20))
 
-    gen = mask_blending_generator(
+    gen = render_gan_generator(
         mask_driver=driver,
-        tag_3d_model_network=tag_3d_model_network,
+        tag_3d_model_network=tag3d_network_dense,
         light_merge_mask16=merge_mask(None),
         offset_merge_light16=merge_mask((4, 4)),
         offset_merge_mask16=merge_mask(None),
