@@ -18,7 +18,7 @@ import matplotlib
 matplotlib.use('Agg')  # noqa
 
 from deepdecoder.data import generator_3d_tags_with_depth_map, Tag3dDataset
-import pipeline.distributions
+import diktya.distributions
 from beras.transform import tile
 import matplotlib.pyplot as plt
 import os
@@ -111,7 +111,7 @@ def main():
     args = parser.parse_args()
     if type(args.dist) == str:
         with open(args.dist) as f:
-            dist = pipeline.distributions.load_from_json(f.read())
+            dist = diktya.distributions.load_from_json(f.read())
 
     else:
         dist = args.dist

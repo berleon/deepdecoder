@@ -21,7 +21,7 @@ import h5py
 from beesgrid import MASK, BlackWhiteArtist, TAG_LABEL_NAMES
 from beras.data_utils import HDF5Tensor
 from itertools import count
-import pipeline.distributions
+import diktya.distributions
 import scipy.ndimage.interpolation
 import scipy.ndimage
 
@@ -117,7 +117,7 @@ class SynthesisedDataset:
 
     def get_tag_distribution(self):
         dist_json = self.f.attrs['distribution'].decode('utf-8')
-        return pipeline.distributions.load_from_json(dist_json)
+        return diktya.distributions.load_from_json(dist_json)
 
     def set_tag_distribution(self, distribution):
         self.f.attrs['distribution'] = distribution.to_json().encode('utf8')
@@ -164,6 +164,9 @@ class Tag3dDataset(SynthesisedDataset):
 
         self._append_pos += size
         return self._append_pos
+
+    def nb_samples(self):
+        return len(self.f['tags'])
 
     def iter(self, batch_size):
         i = 0

@@ -15,7 +15,7 @@
 
 import argparse
 import os
-from pipeline.distributions import to_radians, Uniform, Constant, TruncNormal, \
+from diktya.distributions import to_radians, Uniform, Constant, TruncNormal, \
     examplary_tag_distribution, DistributionCollection
 
 
