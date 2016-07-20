@@ -16,35 +16,35 @@
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
-from deepdecoder.networks import tag_3d_network_dense
+from deepdecoder.networks import tag3d_network_dense
 from deepdecoder.data import Tag3dDataset
 
 from beras.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
     SaveModels
 from beras.visualise import zip_tile
+from beras.util import save_model
 
 from keras.models import Model
 from keras.optimizers import Adam
-from keras.objectives import mse
 from keras.engine.topology import Input
 
 import numpy as np
 import scipy.misc
 import os
-import h5py
 import json
 import argparse
-import pylab
 import seaborn as sns  # noqa
 
 
 def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
         nb_epoch, filter_size, project_factor, nb_dense):
     batch_size = 32
-    basename = "network_3d_tags_n{}_d{}_e{}".format(nb_units, depth, nb_epoch)
+    basename = "network_tags3d_n{}_d{}_e{}".format(nb_units, depth, nb_epoch)
     output_basename = os.path.join(output_dir, basename)
 
     tag_dataset = Tag3dDataset(tags_3d_hdf5_fname)
+    tag_distribution = tag_dataset.f.attrs['distribution']
+
     print("Got {} images from the 3d model".format(tag_dataset.nb_samples()))
     weights_fname = output_basename + ".hdf5"
     if os.path.exists(weights_fname) and not force:
@@ -57,22 +57,18 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     nb_input = next(gen)[0].shape[1]
 
     x = Input(shape=(nb_input,))
-    mask, depth_map = tag_3d_network_dense(x, nb_units=nb_units, depth=depth,
-                                           nb_dense_units=nb_dense)
+    mask, depth_map = tag3d_network_dense(x, nb_units=nb_units, depth=depth,
+                                          nb_dense_units=nb_dense)
     g = Model(x, [mask, depth_map])
     optimizer = Adam()
 
-    tag_3d_more_weight = 3
-    total_pixels = tag_3d_more_weight*64**2 + 16**2
-    weight_depth_map = 16**2 / total_pixels
-    weight_mask = tag_3d_more_weight*64**2 / total_pixels
-    g.compile(optimizer, loss=['mse', 'mse'],
-              loss_weights=[weight_mask, weight_depth_map])
+    g.compile(optimizer, loss=['mse', 'mse'], loss_weights=[1, 1/3.])
 
     scheduler = AutomaticLearningRateScheduler(
         optimizer, 'loss', epoch_patience=12, min_improvment=0.0002)
     history = HistoryPerBatch()
-    save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir)
+    save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir,
+                      hdf5_attrs={'distribution': tag_distribution})
     g.fit_generator(gen, samples_per_epoch=300*batch_size,
                     nb_epoch=nb_epoch, verbose=1, callbacks=[scheduler, save, history])
 
@@ -90,10 +86,7 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     zip_and_save(output_basename + "_predict_tags.png", tags_3d, predict_tags_3d)
     zip_and_save(output_basename + "_predict_depth_map.png", depth_map, predict_depth_map)
 
-    g.save_weights(weights_fname, overwrite=True)
-    f = h5py.File(weights_fname)
-    f.attrs['distribution'] = tag_dataset.f.attrs['distribution']
-    f.attrs['model'] = g.to_json().encode('utf-8')
+    save_model(g, weights_fname, attrs={'distribution': tag_distribution})
 
     with open(output_basename + '.json', 'w+') as f:
         f.write(g.to_json())

@@ -34,7 +34,8 @@ setup(
             'bb_generate_3d_tags = deepdecoder.scripts.generate_3d_tags:main',
             'bb_default_3d_tags_distribution = ' +
                 'deepdecoder.scripts.default_3d_tags_distribution:main',
-            'bb_train_3d_tags_network = deepdecoder.scripts.train_3d_tags_network:main',
+            'bb_train_tag3d_network = deepdecoder.scripts.train_tag3d_network:main',
+            'bb_train_rendergan = deepdecoder.scripts.train_render_gan:main',
         ]
     },
     packages=[
