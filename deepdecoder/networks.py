@@ -19,20 +19,21 @@ import keras.initializations
 from keras.layers.core import Dense, Flatten, Reshape, Activation, \
     Layer, Dropout
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, \
-    UpSampling2D
-from keras.layers.advanced_activations import LeakyReLU
+    UpSampling2D, AveragePooling2D
+from keras.layers.advanced_activations import LeakyReLU, ELU
 from keras.layers.normalization import BatchNormalization
+from keras.engine.topology import merge, Input
+from keras.engine.training import Model
+from keras.optimizers import Adam
 from keras.regularizers import Regularizer
 import keras.backend as K
 
-from beras.util import sequential, concat
-from beras.layers.core import Split, LinearInBounds
-
+from diktya.func_api_helpers import sequential, concat
+from diktya.layers.core import Subtensor, InBounds
 from beesgrid import NUM_MIDDLE_CELLS, NUM_CONFIGS
-
 from deepdecoder.deconv import Deconvolution2D
-
 from deepdecoder.transform import GaussianBlur
+from collections import OrderedDict
 
 
 def get_decoder_model(
@@ -227,7 +228,7 @@ def get_label_generator(x, nb_units, nb_output_units):
         Activation('relu'),
         Dense(nb_output_units),
         batch_norm(gamma_init=constant_init(0.25)),
-        LinearInBounds(-1, 1, clip=True),
+        InBounds(-1, 1, clip=True),
     ], ns='driver')
     return driver(x)
 
@@ -272,7 +273,7 @@ def get_offset_back(inputs, nb_units):
 
     return back_feature_map, sequential([
         Convolution2D(1, 3, 3, border_mode='same'),
-        LinearInBounds(-1, 1, clip=True),
+        InBounds(-1, 1, clip=True),
     ], ns='offset.back_out')(back_feature_map)
 
 
@@ -282,7 +283,7 @@ def get_blur_factor(inputs, min=0, max=2):
         Convolution2D(1, 3, 3),
         Flatten(),
         Dense(1),
-        LinearInBounds(min, max, clip=True),
+        InBounds(min, max, clip=True),
     ], ns='mask_weight_blending')(input)
 
 
@@ -300,13 +301,13 @@ def get_lighting_generator(inputs, nb_units):
         conv(n, 3, 3),
         Convolution2D(3, 1, 1, border_mode='same'),
         UpSampling2D(),  # 64x64
-        LinearInBounds(-1, 1, clip=True),
+        InBounds(-1, 1, clip=True),
         GaussianBlur(sigma=3.5),
     ], ns='lighting')(input)
 
-    shift = Split(0, 1, axis=1)(light_conv)
-    scale_black = Split(1, 2, axis=1)(light_conv)
-    scale_white = Split(2, 3, axis=1)(light_conv)
+    shift = Subtensor(0, 1, axis=1)(light_conv)
+    scale_black = Subtensor(1, 2, axis=1)(light_conv)
+    scale_white = Subtensor(2, 3, axis=1)(light_conv)
 
     return [shift, scale_black, scale_white]
 
@@ -412,7 +413,7 @@ def dcgan_generator(n=32, input_dim=50, nb_output_channels=1, use_dct=False,
 
     model.add(Deconvolution2D(nb_output_channels, 5, 5, subsample=(2, 2),
                               border_mode=(2, 2), init=init))
-    model.add(LinearInBounds(-1, 1))
+    model.add(InBounds(-1, 1))
     return model
 
 
@@ -459,13 +460,12 @@ def dcgan_generator_conv(n=32, input_dim=50, nb_output_channels=1,
 
     model.add(Deconvolution2D(nb_output_channels, 3, 3, border_mode=(1, 1),
                               init=init))
-    model.add(LinearInBounds(-1, 1))
+    model.add(InBounds(-1, 1))
     return model
 
 
-def render_gan_discriminator(x, n=32, conv_repeat=1,
-                                dense=[],
-                                out_activation='sigmoid'):
+def render_gan_discriminator(x, n=32, conv_repeat=1, dense=[],
+                             out_activation='sigmoid'):
     def conv(n):
         layers = [
             Convolution2D(n, 3, 3, subsample=(2, 2), border_mode='same'),
@@ -496,3 +496,80 @@ def render_gan_discriminator(x, n=32, conv_repeat=1,
         [get_dense(nb) for nb in dense],
         Dense(1, activation=out_activation)
     ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
+
+
+def resnet_decoder(nb_filter=16, data_shape=(1, 64, 64)):
+    param_labels = ('z_rot_sin', 'z_rot_cos', 'y_rot', 'x_rot', 'center_x', 'center_y')
+
+    def _bn_relu_conv(nb_filter, nb_row=3, nb_col=3, subsample=1):
+        return sequential([
+            BatchNormalization(mode=0, axis=1),
+            ELU(),
+            Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col,
+                          subsample=(subsample, subsample), init="he_normal", border_mode="same")
+        ])
+
+    def f(nb_filter, x):
+        return sequential([
+            _bn_relu_conv(nb_filter),
+            _bn_relu_conv(nb_filter),
+        ])
+    n = nb_filter
+
+    input = Input(shape=data_shape)
+    x = _bn_relu_conv(n, subsample=2)(input)
+    for _ in range(3):
+        x = merge([x, f(n)(x)], mode='sum')
+
+    x = _bn_relu_conv(2*n, subsample=2)(x)
+    for _ in range(4):
+        x = merge([x, f(2*n)(x)], mode='sum')
+
+    x = _bn_relu_conv(2*n, subsample=2)(x)
+    for _ in range(6):
+        x = merge([x, f(2*n)(x)], mode='sum')
+
+    x = _bn_relu_conv(4*n, subsample=2)(x)
+    for _ in range(3):
+        x = merge([x, f(4*n)(x)], mode='sum')
+
+    x = sequential([
+        AveragePooling2D(pool_size=(4, 4), strides=(1, 1), border_mode="same"),
+        Flatten(),
+        Dense(256),
+        ELU(),
+        BatchNormalization(mode=0),
+        Dropout(0.5),
+    ])(x)
+    ids = sequential([
+        Dense(256),
+        ELU(),
+        BatchNormalization(mode=0),
+        Dropout(0.5),
+    ])(x)
+
+    outputs = OrderedDict()
+    losses = OrderedDict()
+    for i in range(12):
+        name = 'bit_{}'.format(i)
+        outputs[name] = Dense(1, activation='sigmoid', name=name)(ids)
+        losses[name] = 'binary_crossentropy'
+
+    params = sequential([
+        Dense(256),
+        ELU(),
+        BatchNormalization(mode=0),
+        Dropout(0.5),
+    ])(x)
+
+    for name in range(len(param_labels)):
+        outputs[name] = Dense(1, activation='tanh', name=name)(params)
+        losses[name] = 'mse'
+
+    model = Model(input, outputs)
+    optimizer = Adam()
+    model.compile(optimizer=optimizer,
+                  loss=losses,
+                  loss_weights=dict([(k, get_loss_weight(k)) for k in dict(id_losses + param_losses)])
+                  )
+    return model

@@ -20,10 +20,7 @@ from keras.layers.convolutional import Convolution2D
 
 from keras.engine.topology import Input
 from keras.layers.normalization import BatchNormalization
-from keras.layers.core import Dense, Flatten, Reshape, Activation, \
-    Layer
-
-from beras.layers.core import Split, ZeroGradient, LinearInBounds
+from keras.layers.core import Activation
 
 from deepdecoder.deconv import Deconvolution2D
 import numpy as np
@@ -77,7 +74,7 @@ def test_deconvolution2d():
 def test_deconvolution2d_with_conv2d_gpu_contiguous():
     input_shape = (64, 1, 8, 8)
     model = Sequential()
-    model.add(Layer(batch_input_shape=input_shape))
+    model.add(Activation('linear', batch_input_shape=input_shape))
     model.add(Deconvolution2D(8, 3, 3, subsample=(1, 1),
                               border_mode=(1, 1)))
     model.add(BatchNormalization(axis=1))

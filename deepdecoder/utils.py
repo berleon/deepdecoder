@@ -19,7 +19,7 @@ import theano
 import h5py
 import numpy as np
 import theano.tensor as T
-from beras.transform import tile
+from diktya.numpy.utils import tile
 
 floatX = theano.config.floatX
 

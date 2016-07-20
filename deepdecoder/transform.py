@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from beras.transform import upsample, resize_interpolate
-from beras.filters import gaussian_filter_2d, gaussian_kernel_default_radius
+from diktya.theano.image_transform import upsample, resize_interpolate
+from diktya.theano.image_filters import gaussian_filter_2d, gaussian_kernel_default_radius
 from more_itertools import pairwise
 from keras.layers.core import Layer
 from deepdecoder.utils import binary_mask, adaptive_mask
-from keras.regularizers import Regularizer
 import keras.backend as K
 import theano
 

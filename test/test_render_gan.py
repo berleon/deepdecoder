@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from deepdecoder.render_gan import RenderGANExperiment, \
-    RenderGANBuilder, render_gan_custom_objects
+from deepdecoder.render_gan import RenderGAN, render_gan_custom_objects, SaveGAN, \
+    VisualiseTag3dAndFake
 from deepdecoder.networks import tag3d_network_dense
 
 from keras.utils.layer_utils import layer_from_config
 from keras.engine.topology import Input
 from keras.engine.training import Model
 from keras.layers.core import Dense
-from beras.util import sequential
+from diktya.func_api_helpers import sequential
 import json
 import numpy as np
 
@@ -60,7 +60,7 @@ def data(builder, bs):
 
 
 def test_render_gan_builder_gan_train_on_batch():
-    builder = RenderGANBuilder(lambda x: tag3d_network_dense(x, nb_units=4),
+    builder = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
                                generator_units=4, discriminator_units=4,
                                labels_shape=(27,))
     bs = 19
@@ -74,7 +74,7 @@ def test_render_gan_builder_gan_train_on_batch():
 
 
 def test_render_gan_builder_generate():
-    builder = RenderGANBuilder(lambda x: tag3d_network_dense(x, nb_units=4),
+    builder = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
                                generator_units=4, discriminator_units=4,
                                labels_shape=(27,))
     bs = 19
@@ -90,7 +90,7 @@ def test_render_gan_builder_generate():
 
 
 def test_render_gan_builder_generator_train_on_batch():
-    builder = RenderGANBuilder(lambda x: tag3d_network_dense(x, nb_units=4),
+    builder = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
                                generator_units=4, discriminator_units=4,
                                labels_shape=(27,))
     bs = 19
@@ -107,7 +107,7 @@ def test_render_gan_builder_generator_train_on_batch():
 def test_render_gan_builder_generator_extended():
     labels_shape = (27,)
     z_dim_offset = 50
-    builder = RenderGANBuilder(lambda x: tag3d_network_dense(x, nb_units=4),
+    builder = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
                                generator_units=4, discriminator_units=4,
                                z_dim_offset=z_dim_offset,
                                labels_shape=(27,))
@@ -123,10 +123,42 @@ def test_render_gan_builder_generator_extended():
     m.train_on_batch([z_offset, labels], real)
 
 
+def test_save_gan():
+    class MockRenderGAN:
+        def save_weights(self, fname_format, overwrite, attrs):
+            fname = fname_format.format(name="heyho")
+            assert "heyho" in fname
+            assert "hello" in attrs
+    rendergan = MockRenderGAN()
+    save_gan = SaveGAN(rendergan, "test/{epoch}/{name}",
+                       every_epoch=1, hdf5_attrs={"hello": "world"})
+    save_gan.on_epoch_end(0)
+
+
+def test_visualise_tag3d_and_fake(tmpdir):
+    nb_samples = 20**2
+
+    def visualise(inputs, batch_size=32):
+        assert inputs['z'].shape == (nb_samples, ) + MockRenderGAN.z_shape[1:]
+        return {
+            'fake': np.zeros((nb_samples, 1,  16, 16)),
+            'tag3d': np.zeros((nb_samples, 1,  16, 16)),
+        }
+
+    class MockRenderGAN:
+        z_shape = (None, 50)
+
+    rendergan = MockRenderGAN()
+    vis = VisualiseTag3dAndFake(visualise, nb_samples=nb_samples, output_dir=str(tmpdir))
+    vis.model = rendergan
+    vis.on_train_begin()
+    vis.on_epoch_end(0)
+
+
 def test_model_serialization(tmpdir):
     return
     output_dir = tmpdir.join('output_dir')
-    gan = RenderGANBuilder(lambda x: tag3d_network_dense(x, nb_units=4),
+    gan = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
                            generator_units=4, discriminator_units=4)
     experiment = RenderGANExperiment(gan, str(output_dir))
 

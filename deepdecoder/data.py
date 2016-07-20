@@ -19,7 +19,7 @@ import numpy as np
 import h5py
 
 from beesgrid import MASK, BlackWhiteArtist, TAG_LABEL_NAMES
-from beras.data_utils import HDF5Tensor
+from diktya.data_utils import HDF5Tensor
 from itertools import count
 import diktya.distributions
 import scipy.ndimage.interpolation

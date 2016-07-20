@@ -19,10 +19,9 @@ matplotlib.use('Agg')  # noqa
 
 from deepdecoder.data import generator_3d_tags_with_depth_map, Tag3dDataset
 import diktya.distributions
-from beras.transform import tile
+from diktya.theano.image_transform import tile
 import matplotlib.pyplot as plt
 import os
-import h5py
 import argparse
 from keras.utils.generic_utils import Progbar
 from scipy.ndimage.interpolation import zoom
