@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import matplotlib
-matplotlib.use('Agg')  # noqa
 
 from deepdecoder.networks import get_label_generator, \
     get_lighting_generator, get_preprocess, get_blur_factor, \
@@ -23,15 +22,18 @@ from deepdecoder.networks import get_label_generator, \
 from deepdecoder.layers import ThresholdBits, NormSinCosAngle
 from deepdecoder.data import real_generator
 from diktya.gan import GAN
-from diktya.callbacks import VisualiseGAN, LearningRateScheduler
+from diktya.callbacks import VisualiseGAN, LearningRateScheduler, HistoryPerBatch
 
-from diktya.numpy.utils import tile
+from diktya.numpy import tile, image_save, scipy_gaussian_filter_2d
 from diktya.func_api_helpers import concat, save_model, load_model, predict_wrapper
 from keras.optimizers import Adam
 from keras.callbacks import Callback
 from keras.utils.generic_utils import Progbar
 from keras.engine.topology import Input, merge
 from keras.engine.training import Model
+import keras.backend as K
+import scipy.misc
+
 from collections import OrderedDict
 
 from deepdecoder.transform import PyramidBlending, PyramidReduce, \
@@ -40,7 +42,6 @@ from deepdecoder.transform import PyramidBlending, PyramidReduce, \
 from diktya.layers.core import Subtensor, InBounds, ZeroGradient
 
 import numpy as np
-import scipy.misc
 import pylab
 import sys
 import os
@@ -90,12 +91,13 @@ class VisualiseTag3dAndFake(VisualiseGAN):
             tiles.append(fake)
         tiled = tile(tiles, columns_must_be_multiple_of=2)
         if fname is not None:
-            scipy.misc.imsave(tiled[0], fname)
+            image_save(fname, tiled)
 
 
 def render_gan_custom_objects():
     return {
         'GAN': GAN,
+        'ThresholdBits': ThresholdBits,
         'Subtensor': Subtensor,
         'HighPass': HighPass,
         'AddLighting': AddLighting,
@@ -124,8 +126,8 @@ class RenderGAN:
                  data_shape=(1, 64, 64),
                  labels_shape=(24,),
                  nb_bits=12,
-                 generator_optimizer=Adam(lr=0.0002, beta_1=0.5),
-                 discriminator_optimizer=Adam(lr=0.0002, beta_1=0.5)
+                 generator_optimizer=Adam(lr=0.0004, beta_1=0.5),
+                 discriminator_optimizer=Adam(lr=0.0004, beta_1=0.5)
                  ):
         self.tag3d_network = tag3d_network
         self.z_dim_offset = z_dim_offset
@@ -211,7 +213,7 @@ class RenderGAN:
 
         outputs['details_offset'] = details
         details_high_pass = HighPass(4, nb_steps=4, name='details_high_pass')(details)
-        fake = InBounds(-1.2, 1.2, name='fake')(
+        fake = InBounds(-1.0, 1.0, name='fake')(
             merge([details_high_pass, blending], mode='sum'))
         outputs['fake'] = fake
         self.generator_given_z_and_labels = Model([z_offset, labels], [fake])
@@ -298,10 +300,13 @@ def train_callbacks(rendergan, output_dir, nb_visualise, lr_schedule=None,
 
     def default_lr_schedule(lr):
         return {
-            50: lr / 4,
+            100: lr / 4,
             150: lr / 4**2,
             250: lr / 4**3,
         }
+
+    def lr_scheduler(opt):
+        return LearningRateScheduler(opt, lr_schedule(float(K.get_value(opt.lr))))
 
     if lr_schedule is None:
         lr_schedule = default_lr_schedule
@@ -309,19 +314,28 @@ def train_callbacks(rendergan, output_dir, nb_visualise, lr_schedule=None,
     g_optimizer = rendergan.gan.g_optimizer
     d_optimizer = rendergan.gan.d_optimizer
     lr_schedulers = [
-        LearningRateScheduler(g_optimizer, lr_schedule(g_optimizer.lr)),
-        LearningRateScheduler(d_optimizer, lr_schedule(d_optimizer.lr))
+        lr_scheduler(g_optimizer),
+        lr_scheduler(d_optimizer),
     ]
-    return [save_gan_cb, vis_cb] + lr_schedulers
+    hist = HistoryPerBatch(join(output_dir, "history"))
+    return [save_gan_cb, vis_cb, hist] + lr_schedulers
 
 
 def train_data_generator(real_hdf5_fname, batch_size, z_dim):
     for real in real_generator(real_hdf5_fname, batch_size, range=(-1, 1)):
         z = np.random.uniform(-1, 1, (batch_size, z_dim)).astype(np.float32)
+        # real = scipy_gaussian_filter_2d(real, sigma=2/3.)
         yield {
             'data': real,
             'z': z,
         }
+
+
+def save_real_images(real_hdf5_fname, output_dir, nb_visualise=20**2):
+    real = next(train_data_generator(real_hdf5_fname, nb_visualise, 10))['data']
+    tiled = tile(real)
+    fname = join(output_dir, 'real_{}.png'.format(nb_visualise))
+    scipy.misc.imsave(fname, tiled[0])
 
 
 def train(rendergan, real_hdf5_fname, output_dir, callbacks=[],
@@ -332,13 +346,6 @@ def train(rendergan, real_hdf5_fname, output_dir, callbacks=[],
         nb_batches_per_epoch=100,
         nb_epoch=nb_epoch, batch_size=batch_size,
         verbose=1, callbacks=callbacks)
-
-    def save_real_images(self):
-        real = next(self.train_data_generator(0, self.nb_visualise))['real']
-        tiled = tile(real)
-        fname = self.join_output_dir('real_{}.png'.format(self.nb_visualise))
-        save_image(tiled[0], fname)
-
 
     def sample(self, label, nb_samples):
         chunks = 256
