@@ -17,7 +17,7 @@
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
-from deepdecoder.data import generator_3d_tags_with_depth_map, Tag3dDataset
+from deepdecoder.data import generator_3d_tags_with_depth_map, DistributionHDF5Dataset
 import diktya.distributions
 from diktya.theano.image_transform import tile
 import matplotlib.pyplot as plt
@@ -76,16 +76,11 @@ def run(tag_dist, output_fname, force, nb_samples):
         plt.savefig(hist_name.format(label_name))
         plt.clf()
 
-    dset = Tag3dDataset(output_fname, 'w')
-
-    label_sizes = {l: labels[l].shape[1] for l in labels.dtype.names}
-    dset.create_datasets(nb_samples, label_sizes)
-    dset.set_tag_distribution(tag_dist)
-
+    dset = DistributionHDF5Dataset(output_fname, distribution=tag_dist, mode='w')
     progbar = Progbar(nb_samples)
     batch_size = min(20000, nb_samples)
     for labels, tags, depth_map in generator(tag_dist, batch_size, antialiasing=4):
-        pos = dset.append(labels, tags, depth_map)
+        pos = dset.append(labels=labels, tags=tags, depth_map=depth_map)
         progbar.update(pos)
         if pos == nb_samples:
             break

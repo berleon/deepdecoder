@@ -110,76 +110,121 @@ def generated_3d_tags(tag_distribution, batch_size=128, artist=None, scale=1.):
     return labels, grids[0]
 
 
-class SynthesisedDataset:
-    def __init__(self, fname, mode=None):
-        self.fname = fname
-        self.f = h5py.File(fname, mode)
 
-    def get_tag_distribution(self):
-        dist_json = self.f.attrs['distribution'].decode('utf-8')
-        return diktya.distributions.load_from_json(dist_json)
+class HDF5Dataset(h5py.File):
+    def __init__(self, name, nb_samples=None, **kwargs):
+        super().__init__(name, **kwargs)
+        self.dataset_created = '__dataset_created' in self.attrs
+        if nb_samples is None:
+            if '__nb_samples' not in self.attrs:
+                raise Exception("Argument nb_samples not given and not found in hdf5 file.")
+            self.nb_samples = self.attrs['__nb_samples']
+        else:
+            self.nb_samples = nb_samples
+            self.attrs['__nb_samples'] = nb_samples
+        self.chunk_size = 64*64*256*4   # ~4MB
+        self.create_dataset_kwargs = {
+            'compression': 'gzip'
+        }
+        self._append_pos = None
 
-    def set_tag_distribution(self, distribution):
-        self.f.attrs['distribution'] = distribution.to_json().encode('utf8')
-        self.f.attrs['label_names'] = [l.encode('utf8') for l in distribution.names]
+    @staticmethod
+    def _nearest_power_of_two(x):
+        return int(2**np.round(np.log(x) / np.log(2)))
 
-    def get_label_names(self):
-        label_names = [l.decode('utf-8') for l in self.f.attrs['label_names']]
-        assert label_names == TAG_LABEL_NAMES
+    def _create_dataset(self, **kwargs):
+        if self.dataset_created:
+            raise Exception("Datasets allready created.")
 
-
-class Tag3dDataset(SynthesisedDataset):
-    shape = (64, 64)
-
-    def __init__(self, fname, mode=None):
-        super().__init__(fname, mode)
+        self.attrs['dataset_names'] = [k.encode('utf-8') for k in kwargs.keys()]
+        for name, array in kwargs.items():
+            shape = array.shape[1:]
+            size_one_elem = np.prod(shape)
+            nb_chunks = self._nearest_power_of_two(self.chunk_size / size_one_elem)
+            nb_chunks = min(nb_chunks, self.nb_samples)
+            self.create_dataset(name,
+                                shape=(self.nb_samples,) + shape,
+                                dtype=str(array.dtype),
+                                chunks=(nb_chunks,) + shape,
+                                compression='gzip')
+        self.dataset_created = True
         self._append_pos = 0
-        self._max_samples = 0
 
-    def create_datasets(self, nb_samples, labels_size):
-        shape = self.shape
-        self.f.create_dataset("tags", shape=(nb_samples, 1, shape[0], shape[1]), dtype='float32',
-                              chunks=(256, 1, shape[0], shape[1]), compression='gzip')
+    def append(self, **kwargs):
+        """
+        Append the arrays to the hdf5 file. Must always be called with the
+        same keys for one HDF5Dataset.
 
-        self.f.create_dataset("depth_map", shape=(nb_samples, 1, 16, 16), dtype='float32',
-                              chunks=(256, 1, 16, 16), compression='gzip')
+        Args:
+            **kwargs: Dictonary of name to numpy array.
+        """
 
-        for label_name, size in labels_size.items():
-            self.f.create_dataset(label_name, shape=(nb_samples, size), dtype='float32',
-                                  chunks=(256, size), compression='gzip')
-        self._append_pos = 0
-        self._max_samples = nb_samples
+        if not self.dataset_created:
+            self._create_dataset(**kwargs)
+        if self._append_pos >= self.nb_samples:
+            raise Exception("Dataset is allready full!")
 
-    def append(self, labels, tags, depth_map):
-        i = self._append_pos
-        batch_size = len(tags)
-        size = min(i+batch_size, self._max_samples) - i
-        if size == 0:
-            return i
-
-        self.f['tags'][i:i+size] = tags[:size]
-        self.f['depth_map'][i:i+size] = depth_map[:size]
-        for label_name in labels.dtype.names:
-            self.f[label_name][i:i+size] = labels[label_name][:size]
-
-        self._append_pos += size
+        batch_size = len(next(iter(kwargs.values())))
+        begin = self._append_pos
+        end = min(self._append_pos+batch_size, self.nb_samples)
+        for name, array in kwargs.items():
+            if len(array) != batch_size:
+                raise Exception("Arrays must have the same number of samples."
+                                " Got {} and {}".format(batch_size, len(array)))
+            self[name][begin:end] = array
+        self._append_pos += batch_size
         return self._append_pos
 
-    def nb_samples(self):
-        return len(self.f['tags'])
+    def append_generator(self, generator):
+        """
+        Consumes a generator. The generator must yield dictionaries.
+        They are put into the :py:meth:`append`.
+        """
+        while True:
+            self.append(**next(generator))
+            if self._append_pos >= self.nb_samples:
+                break
 
     def iter(self, batch_size):
         i = 0
-        tags = self.f['tags']
-        depth_maps = self.f['depth_map']
-        nb_samples = len(tags)
+        dataset_names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
         while True:
-            masks = tags[i:i+batch_size]
-            depth_map = depth_maps[i:i+batch_size]
-            labels = []
-            for l in TAG_LABEL_NAMES:
-                labels.append(self.f[l][i:i+batch_size])
-            yield [np.concatenate(labels, axis=1), [masks, depth_map]]
-            i += batch_size
-            if i >= nb_samples - batch_size:
-                i = 0
+            yield {
+                name: self[name][i:i+batch_size]
+                for name in dataset_names
+            }
+            i = (i + batch_size) % (self.nb_samples - batch_size)
+
+
+class DistributionHDF5Dataset(HDF5Dataset):
+    def __init__(self, name, distribution=None, **kwargs):
+        super().__init__(name, **kwargs)
+
+        if distribution is None:
+            if 'distribution' not in self.attrs:
+                raise Exception("distribution argument not given and not found"
+                                " in hdf5 file.")
+        else:
+            self.attrs['distribution'] = distribution.to_json().encode('utf8')
+            self.attrs['label_names'] = [l.encode('utf8') for l in distribution.names]
+
+    def get_tag_distribution(self):
+        dist_json = self.attrs['distribution'].decode('utf-8')
+        return diktya.distributions.load_from_json(dist_json)
+
+    def get_label_names(self):
+        return [l.decode('utf-8') for l in self.attrs['label_names']]
+
+    def append(self, labels, **kwargs):
+        for label_name in labels.dtype.names:
+            kwargs[label_name] = labels[label_name]
+        return super().append(**kwargs)
+
+    def iter(self, batch_size):
+        label_names = self.get_label_names()
+        dist = self.get_tag_distribution()
+        for batch in super().iter(batch_size):
+            labels = [batch.pop(name) for name in label_names]
+            labels = np.concatenate(labels, axis=1)
+            batch['labels'] = labels.astype(dist.norm_dtype)
+            yield batch

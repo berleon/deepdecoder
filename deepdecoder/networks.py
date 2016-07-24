@@ -498,6 +498,46 @@ def render_gan_discriminator(x, n=32, conv_repeat=1, dense=[],
     ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
 
 
+def render_gan_discriminator_resnet(x, n=32, conv_repeat=1, dense=[], out_activation='sigmoid'):
+    def get_dense(nb):
+        return [
+            Dense(nb),
+            batch_norm(),
+            LeakyReLU(0.2),
+        ]
+
+    return sequential([
+        Convolution2D(n, 3, 3, border_mode='same'),
+        resnet(n, activation=LeakyReLU(0.3)),
+        Convolution2D(n, 3, 3, subsample=(2, 2), border_mode='same'),
+        LeakyReLU(0.2),
+        batch_norm(),
+        resnet(2*n, activation=LeakyReLU(0.3)),
+        resnet(2*n, activation=LeakyReLU(0.3)),
+        resnet(2*n, activation=LeakyReLU(0.3)),
+        resnet(2*n, activation=LeakyReLU(0.3)),
+        resnet(2*n, activation=LeakyReLU(0.3)),
+        Convolution2D(4*n, 3, 3, subsample=(2, 2), border_mode='same'),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        Convolution2D(4*n, 3, 3, subsample=(2, 2), border_mode='same'),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        resnet(4*n, activation=LeakyReLU(0.3)),
+        Flatten(),
+        [get_dense(nb) for nb in dense],
+        Dense(1, activation=out_activation)
+    ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
+
+
+
 def resnet_decoder(nb_filter=16, data_shape=(1, 64, 64)):
     param_labels = ('z_rot_sin', 'z_rot_cos', 'y_rot', 'x_rot', 'center_x', 'center_y')
 

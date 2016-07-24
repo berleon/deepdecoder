@@ -17,12 +17,12 @@ import matplotlib
 matplotlib.use('Agg')  # noqa
 
 from deepdecoder.networks import tag3d_network_dense
-from deepdecoder.data import Tag3dDataset
+from deepdecoder.data import DistributionHDF5Dataset
 
-from beras.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
+from diktya.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
     SaveModels
-from beras.visualise import zip_tile
-from beras.util import save_model
+from diktya.visualise import zip_tile
+from diktya.func_api_helpers import save_model
 
 from keras.models import Model
 from keras.optimizers import Adam
@@ -42,10 +42,10 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     basename = "network_tags3d_n{}_d{}_e{}".format(nb_units, depth, nb_epoch)
     output_basename = os.path.join(output_dir, basename)
 
-    tag_dataset = Tag3dDataset(tags_3d_hdf5_fname)
-    tag_distribution = tag_dataset.f.attrs['distribution']
+    tag_dataset = DistributionHDF5Dataset(tags_3d_hdf5_fname)
+    tag_distribution = tag_dataset.attrs['distribution']
 
-    print("Got {} images from the 3d model".format(tag_dataset.nb_samples()))
+    print("Got {} images from the 3d model".format(tag_dataset.nb_samples))
     weights_fname = output_basename + ".hdf5"
     if os.path.exists(weights_fname) and not force:
         raise OSError("File {} already exists. Use --force to override it")
