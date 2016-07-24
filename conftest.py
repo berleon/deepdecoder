@@ -68,3 +68,12 @@ def astronaut():
     astronaut = skimage.color.rgb2gray(skimage.data.astronaut())
     astronaut /= 255
     return astronaut[np.newaxis, np.newaxis].astype(np.float32)
+
+
+@pytest.fixture
+def outdir():
+    from py.path import local
+    path = local("test").join("out")
+    if not path.ensure(dir=True):
+        path.mkdir()
+    return path

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from deepdecoder.render_gan import RenderGAN, render_gan_custom_objects, SaveGAN, \
-    VisualiseTag3dAndFake
+    VisualiseTag3dAndFake, DScoreHistogram
 from deepdecoder.networks import tag3d_network_dense
 
 from keras.utils.layer_utils import layer_from_config
@@ -22,6 +22,7 @@ from keras.engine.training import Model
 from keras.layers.core import Dense
 from diktya.func_api_helpers import sequential
 import json
+import os
 import numpy as np
 
 
@@ -155,39 +156,16 @@ def test_visualise_tag3d_and_fake(tmpdir):
     vis.on_epoch_end(0)
 
 
-def test_model_serialization(tmpdir):
-    return
-    output_dir = tmpdir.join('output_dir')
-    gan = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
-                           generator_units=4, discriminator_units=4)
-    experiment = RenderGANExperiment(gan, str(output_dir))
+def test_d_score_histogram(outdir):
+    def generator(inputs):
+        return np.zeros((len(inputs['z']), 1, 64, 64))
 
-    experiment.compile_visualise()
-    gan_config = gan.get_config()
-    f = tmpdir.join('gan.json').open('w+')
-    json.dump(gan_config, f, indent=2)
-    experiment.save_weights("test")
-    experiment.visualise(str(tmpdir.join("test.png")))
-    gan_loaded = layer_from_config(
-        gan_config, custom_objects=render_gan_custom_objects())
+    def discriminator(fakes):
+        return np.random.normal(0.4, scale=0.2, size=(len(fakes), 1))
 
-    experiment_loaded = RenderGANExperiment(
-        gan_loaded, str(tmpdir.join("loaded")))
-    experiment_loaded.compile_visualise()
-
-    all_equal = True
-    for l1, l2 in zip(gan.layers, gan_loaded.layers):
-        if len(l1.trainable_weights) >= 1:
-            assert len(l1.trainable_weights) == len(l2.trainable_weights)
-            if not all([(w1.get_value() == w2.get_value()).all()
-                        for w1, w2 in zip(
-                                l1.trainable_weights, l2.trainable_weights)]):
-                all_equal = False
-    assert not all_equal
-
-    gan_loaded.load_weights(str(output_dir.join('weights', 'test', '{}.hdf5')))
-    experiment_loaded.visualise(str(tmpdir.join("test_loaded.png")))
-
-    for l1, l2 in zip(gan.layers, gan_loaded.layers):
-        for w1, w2 in zip(l1.trainable_weights, l2.trainable_weights):
-            assert (w1.get_value() == w2.get_value()).all()
+    out_path = str(outdir.join("d_score_hist"))
+    os.makedirs(out_path, exist_ok=True)
+    z = np.random.random((1000, 1))
+    vis = DScoreHistogram(generator, discriminator, out_path, z)
+    vis.on_epoch_end(0)
+    assert outdir.join("d_score_hist", "000.png").check()
