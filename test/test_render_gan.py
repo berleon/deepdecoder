@@ -160,12 +160,18 @@ def test_d_score_histogram(outdir):
     def generator(inputs):
         return np.zeros((len(inputs['z']), 1, 64, 64))
 
-    def discriminator(fakes):
-        return np.random.normal(0.4, scale=0.2, size=(len(fakes), 1))
+    def discriminator(data):
+        if (data == 0).all():   # fakes
+            d = np.random.normal(0.3, scale=0.2, size=(len(data), 1))
+        else:   # reals
+            d = np.random.normal(0.7, scale=0.2, size=(len(data), 1))
+        return np.clip(d, 0, 1)
 
     out_path = str(outdir.join("d_score_hist"))
     os.makedirs(out_path, exist_ok=True)
-    z = np.random.random((1000, 1))
-    vis = DScoreHistogram(generator, discriminator, out_path, z)
+    nb_samples = 1000
+    z = np.random.random((nb_samples, 1))
+    real = np.ones((nb_samples, 1, 64, 64))
+    vis = DScoreHistogram(generator, discriminator, out_path, z, real)
     vis.on_epoch_end(0)
     assert outdir.join("d_score_hist", "000.png").check()
