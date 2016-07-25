@@ -256,24 +256,24 @@ class RenderGAN:
                                                          list(outputs.values()))
 
     @property
+    def pos_z_bits(self):
+        return (0, self.z_dim_bits)
+
+    @property
     def pos_z_labels(self):
-        return (0, self.z_dim_labels)
+        return (self.z_dim_bits, self.z_dim_bits + self.z_dim_labels)
 
     @property
     def pos_z_offset(self):
-        return (self.z_dim_labels, self.z_dim_labels + self.z_dim_offset)
-
-    @property
-    def pos_z_bits(self):
-        return (self.z_dim_labels + self.z_dim_offset,
-                self.z_dim_labels + self.z_dim_offset + self.z_dim_bits)
+        return (self.z_dim_labels + self.z_dim_bits,
+                self.z_dim_labels + self.z_dim_bits + self.z_dim_offset)
 
     def _build_generator_given_z(self):
         z = Input(shape=(self.z_dim,), name='z')
 
+        z_bits = Subtensor(*self.pos_z_bits, axis=1)(z)
         z_labels = Subtensor(*self.pos_z_labels, axis=1)(z)
         z_offset = Subtensor(*self.pos_z_offset, axis=1)(z)
-        z_bits = Subtensor(*self.pos_z_bits, axis=1)(z)
         bits = ThresholdBits()(z_bits)
         nb_labels_without_bits = self.labels_shape[0] - self.nb_bits
         generated_labels = get_label_generator(
