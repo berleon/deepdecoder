@@ -315,20 +315,24 @@ class RenderGAN:
 
 
 class DScoreHistogram(Callback):
-    def __init__(self, generate_fn, discriminator_fn, output_dir, z, nb_samples=1000):
+    def __init__(self, generate_fn, discriminator_fn, output_dir, z, real):
         self.generate_fn = generate_fn
         self.discriminator_fn = discriminator_fn
-        self.nb_samples = 1000
+        self.real = real
         self.z = z
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
     def plot_discriminator_score(self):
         fakes = self.generate_fn(inputs={'z': self.z})
-        d_scores = self.discriminator_fn(fakes)
+        d_fakes = self.discriminator_fn(fakes)
+        d_reals = self.discriminator_fn(self.real)
         fig, axes = plt.subplots(figsize=(10, 10))
-        sns.distplot(d_scores, bins=20, ax=axes,
+        sns.distplot(d_fakes, bins=20, ax=axes, color='red',
                      label='number of fake images', rug=True,
+                     axlabel='discriminator score')
+        sns.distplot(d_reals, bins=20, ax=axes, color='green',
+                     label='number of real images', rug=True,
                      axlabel='discriminator score')
         axes.legend()
         return fig, axes
@@ -341,8 +345,8 @@ class DScoreHistogram(Callback):
             plt.close(fig)
 
 
-def train_callbacks(rendergan, output_dir, nb_visualise, lr_schedule=None,
-                    hdf5_attrs={}):
+def train_callbacks(rendergan, output_dir, nb_visualise, real_hdf5_fname,
+                    lr_schedule=None, hdf5_attrs={}):
     save_gan_cb = SaveGAN(rendergan, join(output_dir, "models/{epoch:^03}/{name}.hdf5"),
                           every_epoch=10, hdf5_attrs=hdf5_attrs)
 
@@ -400,9 +404,13 @@ def train_callbacks(rendergan, output_dir, nb_visualise, lr_schedule=None,
 
     dscore_outdir = join(output_dir, 'd_score_hist')
     os.makedirs(dscore_outdir, exist_ok=True)
+
+    nb_score = 1000
+    real = next(train_data_generator(real_hdf5_fname, nb_score, 1))['data']
     dscore = DScoreHistogram(rendergan.gan.generate,
                              rendergan.discriminator.predict,
-                             dscore_outdir, rendergan.gan.random_z(1000))
+                             dscore_outdir, rendergan.gan.random_z(nb_score),
+                             real)
 
     return [save_gan_cb, vis_cb, vis_sorted, vis_all, hist, hist_save, dscore] + lr_schedulers
 
