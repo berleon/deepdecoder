@@ -110,7 +110,6 @@ def generated_3d_tags(tag_distribution, batch_size=128, artist=None, scale=1.):
     return labels, grids[0]
 
 
-
 class HDF5Dataset(h5py.File):
     def __init__(self, name, nb_samples=None, **kwargs):
         super().__init__(name, **kwargs)
@@ -122,7 +121,7 @@ class HDF5Dataset(h5py.File):
         else:
             self.nb_samples = nb_samples
             self.attrs['__nb_samples'] = nb_samples
-        self.chunk_size = 64*64*256*4   # ~4MB
+        self.chunk_size = 2**16   # ~64kB
         self.create_dataset_kwargs = {
             'compression': 'gzip'
         }
@@ -207,6 +206,12 @@ class DistributionHDF5Dataset(HDF5Dataset):
         else:
             self.attrs['distribution'] = distribution.to_json().encode('utf8')
             self.attrs['label_names'] = [l.encode('utf8') for l in distribution.names]
+
+    def get_distribution_hdf5_attrs(self):
+        return {
+            name: self.attrs[name]
+            for name in ('distribution', 'label_names')
+        }
 
     def get_tag_distribution(self):
         dist_json = self.attrs['distribution'].decode('utf-8')

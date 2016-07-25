@@ -41,8 +41,8 @@ def test_hdf5_dataset(tmpdir):
     dset.append(name=np.random.random((500, 1, 8, 8)))
     assert dset['name'].dtype == np.float64
     assert dset['name'].shape == (200000, 1, 8, 8)
-    # between 1MB and 8MB
-    assert 1e6 <= np.prod(dset['name'].chunks) <= 8e6
+    # between 32kB and 100kB
+    assert 32e4 <= np.prod(dset['name'].chunks) <= 1e5
 
 
 def test_distribution_hdf5_dataset(tmpdir):
