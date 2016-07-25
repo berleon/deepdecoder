@@ -19,14 +19,14 @@ from beesgrid import BlackWhiteArtist
 from diktya.distributions import examplary_tag_distribution, DistributionCollection
 import pytest
 
+
 def test_generated_3d_tags():
     artist = BlackWhiteArtist(0, 255, 0, 1)
     label_dist = DistributionCollection(examplary_tag_distribution())
     bs = 8
-    labels, grids = generated_3d_tags(label_dist, batch_size=128, artist=artist)
+    labels, grids = generated_3d_tags(label_dist, batch_size=bs, artist=artist)
     assert grids.shape == (bs, 1, 64, 64)
-    for label_key in labels.dtype.names:
-        assert label_key in label_dist.keys
+    assert list(labels.dtype.names) == label_dist.names
 
 
 def test_hdf5_dataset(tmpdir):
@@ -41,8 +41,8 @@ def test_hdf5_dataset(tmpdir):
     dset.append(name=np.random.random((500, 1, 8, 8)))
     assert dset['name'].dtype == np.float64
     assert dset['name'].shape == (200000, 1, 8, 8)
-    # between 32kB and 100kB
-    assert 32e4 <= np.prod(dset['name'].chunks) <= 1e5
+    # between 30kB and 100kB
+    assert 3e4 <= np.prod(dset['name'].chunks) <= 1e5
 
 
 def test_distribution_hdf5_dataset(tmpdir):
