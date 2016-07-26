@@ -13,7 +13,8 @@
 # limitations under the License.
 
 from diktya.theano.image_transform import upsample, resize_interpolate
-from diktya.theano.image_filters import gaussian_filter_2d, gaussian_kernel_default_radius
+from diktya.theano.image_filters import gaussian_filter_2d, gaussian_kernel_default_radius, \
+    gaussian_filter_2d_variable_sigma
 from more_itertools import pairwise
 from keras.layers.core import Layer
 from deepdecoder.utils import binary_mask, adaptive_mask
@@ -118,24 +119,29 @@ class GaussianBlur(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
-class VariableGaussianBlur(Layer):
-    def __init__(self, window_radius=10, **kwargs):
-        self.window_radius = window_radius
-        super().__init__(**kwargs)
+class BlendingBlur(Layer):
+    def __init__(self, sigma=2, window_radius=None, **kwargs):
+        self.sigma = sigma
+        self.window_radius = gaussian_kernel_default_radius(
+            sigma, window_radius)
+        super(BlendingBlur, self).__init__(**kwargs)
 
     def get_output_shape_for(self, input_shape):
         input_shape, _ = input_shape
         return input_shape
 
     def call(self, x, mask=None):
-        input, sigmas = x
-        return gaussian_filter_2d_variable_sigma(input, sigmas, window_radius=self.window_radius)
+        image, factor = x
+        down = gaussian_filter_2d(image, self.sigma, self.window_radius)
+        high_freq = image - down
+        return down + high_freq * factor.dimshuffle(0, 1, 'x', 'x')
 
     def get_config(self):
         config = {
+            'sigma': self.sigma,
             'window_radius': self.window_radius,
         }
-        base_config = super(GaussianBlur, self).get_config()
+        base_config = super(BlendingBlur, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
 
