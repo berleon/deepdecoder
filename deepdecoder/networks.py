@@ -317,7 +317,9 @@ def get_details(inputs, nb_units):
     return sequential([
         conv(n, 3, 3),
         conv(n, 3, 3),
-        Convolution2D(1, 5, 5, border_mode='same', init='normal'),
+        conv(n, 3, 3),
+        Convolution2D(1, 3, 3, border_mode='same', init='normal'),
+        InBounds(-0.5, 0.5, clip=True)
     ], ns='details')(concat(inputs))
 
 
