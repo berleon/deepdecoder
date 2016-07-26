@@ -85,59 +85,6 @@ def blend_pyramid(a, b, mask, num_layers=None, weights=None):
     return img
 
 
-class PyramidBlendingGridIdx(Layer):
-    def __init__(self, tag_mean, **kwargs):
-        raise Exception("Not updated to the new keras synatx")
-        self.tag_mean = tag_mean
-        self.min_black_white_distance = 0.05
-        super().__init__(**kwargs)
-
-    @property
-    def output_shape(self):
-        shp = self.input_shape
-        return (shp[0], 1) + shp[2:]
-
-    def get_output(self, train=False):
-        tag_mean = get_output(self.tag_mean, train,
-                              self.layer_cache)
-        black_mean = tag_mean[:, 0]
-        white_mean = K.abs(tag_mean[:, 1]) + black_mean + \
-            self.min_black_white_distance
-
-        nb_pyramid_layers = 3
-        input = self.get_input(train)
-        image = input[:, :1]
-        grid_idx = input[:, 1:]
-        selection_mask = binary_mask(grid_idx, ignore=0, black=0.8, white=0.8)
-
-        pattern = (0, 'x', 'x', 'x')
-        tag = adaptive_mask(grid_idx, ignore=0,
-                            black=black_mean.dimshuffle(*pattern),
-                            white=white_mean.dimshuffle(*pattern))
-
-        gauss_pyr_tag = list(pyramid_gaussian(tag, nb_pyramid_layers))
-        gauss_pyr_image = list(pyramid_gaussian(image, nb_pyramid_layers))
-        gauss_pyr_mask = list(pyramid_gaussian(selection_mask,
-                                               nb_pyramid_layers))
-        pyr_masks = [0]*(len(gauss_pyr_mask) - 1) + gauss_pyr_mask[-1:]
-
-        lap_pyr_tag = pyramid_laplace(gauss_pyr_tag) + gauss_pyr_tag[-1:]
-        lap_pyr_image = pyramid_laplace(gauss_pyr_image) + gauss_pyr_image[-1:]
-
-        blend_pyr = []
-        for mask, lap_tag, lap_image in zip(pyr_masks, lap_pyr_tag,
-                                            lap_pyr_image):
-            blend = lap_tag*mask + lap_image*(1 - mask)
-            blend_pyr.append(blend)
-
-        img = None
-        for low, high in pairwise(reversed(blend_pyr)):
-            if img is None:
-                img = low
-            img = upsample(img) + high
-        return img
-
-
 class PyramidReduce(Layer):
     def __init__(self, scale=0.5, **kwargs):
         self.scale = scale
