@@ -117,6 +117,28 @@ class GaussianBlur(Layer):
         base_config = super(GaussianBlur, self).get_config()
         return dict(list(base_config.items()) + list(config.items()))
 
+
+class VariableGaussianBlur(Layer):
+    def __init__(self, window_radius=10, **kwargs):
+        self.window_radius = window_radius
+        super().__init__(**kwargs)
+
+    def get_output_shape_for(self, input_shape):
+        input_shape, _ = input_shape
+        return input_shape
+
+    def call(self, x, mask=None):
+        input, sigmas = x
+        return gaussian_filter_2d_variable_sigma(input, sigmas, window_radius=self.window_radius)
+
+    def get_config(self):
+        config = {
+            'window_radius': self.window_radius,
+        }
+        base_config = super(GaussianBlur, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 class UpsampleInterpolate(Layer):
     def __init__(self, scale, **kwargs):
         self.scale = scale
