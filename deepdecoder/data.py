@@ -165,13 +165,14 @@ class HDF5Dataset(h5py.File):
 
         batch_size = len(next(iter(kwargs.values())))
         begin = self._append_pos
-        end = min(self._append_pos+batch_size, self.nb_samples)
+        end = min(begin+batch_size, self.nb_samples)
+        nb_from_batch = end - begin
         for name, array in kwargs.items():
             if len(array) != batch_size:
                 raise Exception("Arrays must have the same number of samples."
                                 " Got {} and {}".format(batch_size, len(array)))
-            self[name][begin:end] = array
-        self._append_pos += batch_size
+            self[name][begin:end] = array[:nb_from_batch]
+        self._append_pos += nb_from_batch
         return self._append_pos
 
     def append_generator(self, generator):
@@ -195,6 +196,23 @@ class HDF5Dataset(h5py.File):
             i = (i + batch_size) % (self.nb_samples - batch_size)
 
 
+def h5_add_distribution(f, distribution):
+    if hasattr(f, 'attrs'):
+        h5 = f
+    elif type(f) == str:
+        h5 = h5py.File(f)
+    for name, value in get_distribution_hdf5_attrs(distribution).items():
+        h5.attrs[name] = value
+    h5.close()
+
+
+def get_distribution_hdf5_attrs(distribution):
+    return {
+        'distribution': distribution.to_json().encode('utf8'),
+        'label_names': [l.encode('utf8') for l in distribution.names]
+    }
+
+
 class DistributionHDF5Dataset(HDF5Dataset):
     def __init__(self, name, distribution=None, **kwargs):
         super().__init__(name, **kwargs)
@@ -204,8 +222,7 @@ class DistributionHDF5Dataset(HDF5Dataset):
                 raise Exception("distribution argument not given and not found"
                                 " in hdf5 file.")
         else:
-            self.attrs['distribution'] = distribution.to_json().encode('utf8')
-            self.attrs['label_names'] = [l.encode('utf8') for l in distribution.names]
+            h5_add_distribution(self, distribution)
 
     def get_distribution_hdf5_attrs(self):
         return {
