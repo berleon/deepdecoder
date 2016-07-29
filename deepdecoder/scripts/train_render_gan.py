@@ -29,9 +29,13 @@ pylab.rcParams['figure.figsize'] = (16, 16)
 sys.setrecursionlimit(10000)
 
 
-def assert_dist_names_match(hdf5_fname):
-    dist = diktya.distributions.load_from_json(
+def get_distribution(hdf5_fname):
+    return diktya.distributions.load_from_json(
         get_hdf5_attr(hdf5_fname, 'distribution').decode('utf-8'))
+
+
+def assert_dist_names_match(hdf5_fname):
+    dist = get_distribution(hdf5_fname)
     assert dist.names == [
         'bits',
         'z_rotation',
@@ -51,6 +55,7 @@ def run(output_dir, tag3d_network_weights, real_hdf5_fname, force, nb_epoch,
         nb_gen_units, nb_dis_units):
     os.makedirs(output_dir, exist_ok=force)
     assert_dist_names_match(tag3d_network_weights)
+    dist = get_distribution(tag3d_network_weights)
     visualise_dir = os.path.join(output_dir, 'visualise')
     os.makedirs(visualise_dir, exist_ok=force)
     save_real_images(real_hdf5_fname, visualise_dir)
@@ -61,12 +66,12 @@ def run(output_dir, tag3d_network_weights, real_hdf5_fname, force, nb_epoch,
     callbacks = train_callbacks(
         gan, output_dir, nb_visualise=20**2,
         real_hdf5_fname=real_hdf5_fname,
-        hdf5_attrs={
-            'distribution': get_hdf5_attr(tag3d_network_weights, 'distribution')
-        })
+        overwrite=force,
+        distribution=dist
+    )
 
     train(gan, real_hdf5_fname, output_dir, callbacks=callbacks,
-          batch_size=16,
+          batch_size=25,
           nb_epoch=nb_epoch)
 
 

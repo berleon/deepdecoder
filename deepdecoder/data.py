@@ -52,7 +52,8 @@ def real_generator(hdf5_fname, nb_real, use_mean_image=False, range=(0, 1)):
 
     for i in count(step=nb_real):
         ti = i % nb_tags
-        tag_batch = tags[ti:ti+nb_real] / 255
+        assert ti + nb_real < nb_tags
+        tag_batch = tags[ti:ti+nb_real] / 255.
         if use_mean_image:
             tag_batch -= mean_image
         yield (high - low)*tag_batch + low
@@ -199,11 +200,14 @@ class HDF5Dataset(h5py.File):
 def h5_add_distribution(f, distribution):
     if hasattr(f, 'attrs'):
         h5 = f
+        close = False
     elif type(f) == str:
         h5 = h5py.File(f)
+        close = True
     for name, value in get_distribution_hdf5_attrs(distribution).items():
         h5.attrs[name] = value
-    h5.close()
+    if close:
+        h5.close()
 
 
 def get_distribution_hdf5_attrs(distribution):

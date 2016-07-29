@@ -29,6 +29,7 @@ from keras.regularizers import Regularizer
 import keras.backend as K
 
 from diktya.func_api_helpers import sequential, concat
+from diktya.blocks import resnet
 from diktya.layers.core import Subtensor, InBounds
 from beesgrid import NUM_MIDDLE_CELLS, NUM_CONFIGS
 from deepdecoder.deconv import Deconvolution2D
@@ -126,7 +127,9 @@ def tag3d_network_dense(input, nb_units=64, nb_dense_units=[512, 512],
                         depth=2, nb_output_channels=1, trainable=True):
     n = nb_units
 
-    def conv(n, repeats=1):
+    def conv(n, repeats=None):
+        if repeats is None:
+            repeats = depth
         return [
             [
                 Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
@@ -144,15 +147,15 @@ def tag3d_network_dense(input, nb_units=64, nb_dense_units=[512, 512],
         Reshape((8*n, 4, 4,)),
         conv(8*n),
         UpSampling2D(),  # 8x8
-        conv(4*n, depth),
+        conv(4*n),
         UpSampling2D(),  # 16x16
         conv(2*n),
     ], ns='tag3d_gen.base', trainable=trainable)(input)
 
     tag3d = sequential([
-        conv(2*n, depth),
+        conv(2*n),
         UpSampling2D(),  # 32x32
-        conv(n, 2),
+        conv(n),
         UpSampling2D(),  # 64x64
         conv(n, 1),
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
@@ -269,6 +272,7 @@ def get_offset_back(inputs, nb_units):
         UpSampling2D(),  # 64x64
         conv(n, 3, 3),
         conv(n, 3, 3),
+        InBounds(-1, 1, clip=True),
     ], ns='offset.back')(input)
 
     return back_feature_map, sequential([
@@ -306,8 +310,10 @@ def get_lighting_generator(inputs, nb_units):
     ], ns='lighting')(input)
 
     shift = Subtensor(0, 1, axis=1)(light_conv)
-    scale_black = Subtensor(1, 2, axis=1)(light_conv)
-    scale_white = Subtensor(2, 3, axis=1)(light_conv)
+
+    in_bounds = InBounds(0, 1, clip=True)
+    scale_black = in_bounds(Subtensor(1, 2, axis=1)(light_conv))
+    scale_white = in_bounds(Subtensor(2, 3, axis=1)(light_conv))
 
     return [shift, scale_black, scale_white]
 
@@ -319,7 +325,7 @@ def get_details(inputs, nb_units):
         conv(n, 3, 3),
         conv(n, 3, 3),
         Convolution2D(1, 3, 3, border_mode='same', init='normal'),
-        InBounds(-0.5, 0.5, clip=True)
+        InBounds(-0.75, 0.75, clip=True)
     ], ns='details')(concat(inputs))
 
 
@@ -525,9 +531,7 @@ def render_gan_discriminator_resnet(x, n=32, conv_repeat=1, dense=[], out_activa
         resnet(4*n, activation=LeakyReLU(0.3)),
         resnet(4*n, activation=LeakyReLU(0.3)),
         resnet(4*n, activation=LeakyReLU(0.3)),
-        resnet(4*n, activation=LeakyReLU(0.3)),
         Convolution2D(4*n, 3, 3, subsample=(2, 2), border_mode='same'),
-        resnet(4*n, activation=LeakyReLU(0.3)),
         resnet(4*n, activation=LeakyReLU(0.3)),
         resnet(4*n, activation=LeakyReLU(0.3)),
         resnet(4*n, activation=LeakyReLU(0.3)),
@@ -539,8 +543,8 @@ def render_gan_discriminator_resnet(x, n=32, conv_repeat=1, dense=[], out_activa
     ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
 
 
-
-def resnet_decoder(nb_filter=16, data_shape=(1, 64, 64)):
+def decoder_resnet(nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
+                   optimizer='adam'):
     param_labels = ('z_rot_sin', 'z_rot_cos', 'y_rot', 'x_rot', 'center_x', 'center_y')
 
     def _bn_relu_conv(nb_filter, nb_row=3, nb_col=3, subsample=1):
@@ -592,7 +596,7 @@ def resnet_decoder(nb_filter=16, data_shape=(1, 64, 64)):
 
     outputs = OrderedDict()
     losses = OrderedDict()
-    for i in range(12):
+    for i in range(nb_bits):
         name = 'bit_{}'.format(i)
         outputs[name] = Dense(1, activation='sigmoid', name=name)(ids)
         losses[name] = 'binary_crossentropy'
@@ -604,14 +608,20 @@ def resnet_decoder(nb_filter=16, data_shape=(1, 64, 64)):
         Dropout(0.5),
     ])(x)
 
+    outputs['z_rot'] = Dense(2, activation='tanh', name=name)(params)
+    losses['z_rot'] = 'mse'
+    param_labels = ('y_rot', 'x_rot', 'center_x', 'center_y')
     for name in range(len(param_labels)):
         outputs[name] = Dense(1, activation='tanh', name=name)(params)
         losses[name] = 'mse'
 
+    def get_loss_weight(name):
+        if name.startswith('bit'):
+            return 1.
+        else:
+            return 0.1
+
     model = Model(input, outputs)
-    optimizer = Adam()
-    model.compile(optimizer=optimizer,
-                  loss=losses,
-                  loss_weights=dict([(k, get_loss_weight(k)) for k in dict(id_losses + param_losses)])
-                  )
+    model.compile(optimizer, loss=list(losses.values()),
+                  loss_weights={k: get_loss_weight(k) for k in losses.keys()})
     return model

@@ -19,12 +19,12 @@ from keras.layers.convolutional import Convolution2D, UpSampling2D, \
     MaxPooling2D
 from keras.engine.topology import Input, Container
 from keras.optimizers import Adam
-from beras.gan import GAN, gan_binary_crossentropy, gan_outputs
+from diktya.gan import GAN, gan_binary_crossentropy, gan_outputs
 import pytest
 from beesgrid import get_gt_files_in_dir, gt_grids, NUM_MIDDLE_CELLS, \
     CONFIG_CENTER, NUM_CONFIGS
 
-from beras.util import sequential, concat
+from diktya.func_api_helpers import sequential, concat
 from deepdecoder.networks import render_gan_generator, get_label_generator, \
     get_lighting_generator, get_offset_merge_mask, get_blur_factor, \
     get_offset_back, get_offset_front, get_offset_middle, tag3d_network_dense, \

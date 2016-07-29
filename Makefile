@@ -48,17 +48,18 @@ find_tags: find_tags_setting.yaml localizer_weights localizer_preprocessed_image
 	echo  '{"tags_position": "$(FIND_TAGS_JSON)"}' > find_tags
 
 
-build_real_dataset_hdf5 ="$(output_dir)/real_tags.hdf5"
+build_real_dataset_hdf5 =$(output_dir)/real_tags.hdf5
+real_dataset=
 build_real_dataset: find_tags real_images build_real_dataset_setting.yaml
 	rm -rf $(build_real_dataset_hdf5)
 	bb_build_tag_dataset \
-             --out $(build_real_dataset_hdf5) \
+             --out "$(build_real_dataset_hdf5)" \
              --roi-size $(call get,roi_size,build_real_dataset_setting.yaml) \
              --offset $(call get,offset,build_real_dataset_setting.yaml) \
              --threshold $(call get,threshold,build_real_dataset_setting.yaml) \
              --image-pathfile real_images \
-             $(call get,tags_position,find_tags) \
-
+             $(call get,tags_position,find_tags)
+	echo '{"path": "$(build_real_dataset_hdf5)"}' > build_real_dataset
 generate_3d_tags_distribution.json:
 	bb_default_3d_tags_distribution generate_3d_tags_distribution.json
 
@@ -79,10 +80,10 @@ n3d_units = $(call get,units,network_3d_tag_settings.yaml)
 n3d_depth = $(call get,depth,network_3d_tag_settings.yaml)
 n3d_epoch = $(call get,epoch,network_3d_tag_settings.yaml)
 n3d_nb_dense = $(call get,nb_dense,network_3d_tag_settings.yaml)
-n3d_weights =$(network_3d_tag_dir)/network_3d_tags_n$(n3d_units)_d$(n3d_depth)_e$(n3d_epoch).hdf5
-
-train_network_3d_tag: generate_3d_tags network_3d_tag_settings.yaml
-	bb_train_3d_tags_network \
+n3d_weights =$(network_3d_tag_dir)/network_tags3d_n$(n3d_units)_d$(n3d_depth)_e$(n3d_epoch).hdf5
+tag3d_network_weights=$(call,get,weights_path,train_tag3d_network)
+train_tag3d_network: generate_3d_tags network_3d_tag_settings.yaml
+	bb_train_tag3d_network \
 		--force \
 		--3d-tags $(call get,path,generate_3d_tags) \
 		--units $(n3d_units) \
@@ -91,11 +92,20 @@ train_network_3d_tag: generate_3d_tags network_3d_tag_settings.yaml
 		--nb-dense $(n3d_nb_dense) \
 		$(network_3d_tag_dir)
 	test -e $(n3d_weights)
-	echo '{"weights_path": "$(n3d_weights)"}' > train_network_3d_tag
+	echo '{"weights_path": "$(n3d_weights)"}' > train_tag3d_network
 
-train_render_gan: train_structure_model, build_real_dataset
-	bb_train_render_gan
-
+generator_units = $(call get,gen-units,render_gan_settings.yaml)
+discriminator_units = $(call get,dis-units,render_gan_settings.yaml)
+render_gan_dir = $(output_dir)/render_gan_morning
+train_render_gan: train_tag3d_network build_real_dataset
+	bb_train_rendergan \
+		--real $(call get,path,build_real_dataset) \
+		--nntag3d $(call get,weights_path,train_tag3d_network) \
+		--output-dir $(render_gan_dir) \
+		--force  \
+		--epoch $(call get,epoch,render_gan_settings.yaml) \
+		--dis-units $(discriminator_units) \
+		--gen-units $(generator_units)
 
 sample_artificial_trainset: train_render_gan
 	bb_sample_artificial_trainset

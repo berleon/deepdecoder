@@ -21,7 +21,7 @@ from diktya.distributions import to_radians, Uniform, Constant, TruncNormal, \
 
 def default_tag_distribution():
     tag_dist_params = examplary_tag_distribution()
-    angle = to_radians(65)
+    angle = to_radians(60)
     tag_dist_params["x_rotation"] = TruncNormal(-angle, angle, 0, angle / 2)
     tag_dist_params["y_rotation"] = TruncNormal(-angle, angle, 0, angle / 2)
     tag_dist_params["radius"] = TruncNormal(22, 26, 24.0, 1.3)

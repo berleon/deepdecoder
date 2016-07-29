@@ -19,7 +19,7 @@ matplotlib.use('Agg')  # noqa
 
 from deepdecoder.data import generator_3d_tags_with_depth_map, DistributionHDF5Dataset
 import diktya.distributions
-from diktya.theano.image_transform import tile
+from diktya.numpy import tile
 import matplotlib.pyplot as plt
 import os
 import argparse
@@ -28,6 +28,21 @@ from scipy.ndimage.interpolation import zoom
 from scipy.ndimage.filters import gaussian_filter1d
 from scipy.misc import imsave
 from deepdecoder.scripts.default_3d_tags_distribution import default_tag_distribution
+from queue import Queue
+import threading
+import multiprocessing
+from joblib import Parallel
+
+
+def _run_generator(generator, queue):
+    for x in generator():
+        queue.put(x)
+
+
+def parallel(generator):
+    p = Parallel(n_jobs=-1)
+    p(generator())
+        # TODO: join threads
 
 
 def generator(tag_dist, batch_size, antialiasing=1):
@@ -76,11 +91,13 @@ def run(tag_dist, output_fname, force, nb_samples):
         plt.savefig(hist_name.format(label_name))
         plt.clf()
 
-    dset = DistributionHDF5Dataset(output_fname, distribution=tag_dist, mode='w')
+    dset = DistributionHDF5Dataset(output_fname, distribution=tag_dist,
+                                   nb_samples=nb_samples, mode='w')
     progbar = Progbar(nb_samples)
-    batch_size = min(20000, nb_samples)
+    batch_size = min(25000, nb_samples)
+
     for labels, tags, depth_map in generator(tag_dist, batch_size, antialiasing=4):
-        pos = dset.append(labels=labels, tags=tags, depth_map=depth_map)
+        pos = dset.append(labels=labels, tag3d=tags, depth_map=depth_map)
         progbar.update(pos)
         if pos == nb_samples:
             break

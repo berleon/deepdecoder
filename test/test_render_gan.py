@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from deepdecoder.render_gan import RenderGAN, render_gan_custom_objects, SaveGAN, \
-    VisualiseTag3dAndFake, DScoreHistogram
+    VisualiseTag3dAndFake, DScoreHistogram, StoreSamples
 from deepdecoder.networks import tag3d_network_dense
 
 from keras.utils.layer_utils import layer_from_config
@@ -21,7 +21,7 @@ from keras.engine.topology import Input
 from keras.engine.training import Model
 from keras.layers.core import Dense
 from diktya.func_api_helpers import sequential
-import json
+from diktya.distributions import DistributionCollection, examplary_tag_distribution
 import os
 import numpy as np
 
@@ -109,9 +109,9 @@ def test_render_gan_builder_generator_extended():
     labels_shape = (27,)
     z_dim_offset = 50
     builder = RenderGAN(lambda x: tag3d_network_dense(x, nb_units=4),
-                               generator_units=4, discriminator_units=4,
-                               z_dim_offset=z_dim_offset,
-                               labels_shape=(27,))
+                        generator_units=4, discriminator_units=4,
+                        z_dim_offset=z_dim_offset,
+                        labels_shape=(27,))
     bs = 19
     z, z_offset, labels = data(builder, bs)
     real = np.zeros((bs,) + builder.data_shape)
@@ -138,40 +138,40 @@ def test_save_gan():
 
 def test_visualise_tag3d_and_fake(tmpdir):
     nb_samples = 20**2
-
-    def visualise(inputs, batch_size=32):
-        assert inputs['z'].shape == (nb_samples, ) + MockRenderGAN.z_shape[1:]
-        return {
-            'fake': np.zeros((nb_samples, 1,  16, 16)),
-            'tag3d': np.zeros((nb_samples, 1,  16, 16)),
-        }
-
-    class MockRenderGAN:
-        z_shape = (None, 50)
-
-    rendergan = MockRenderGAN()
-    vis = VisualiseTag3dAndFake(visualise, nb_samples=nb_samples, output_dir=str(tmpdir))
-    vis.model = rendergan
-    vis.on_train_begin()
-    vis.on_epoch_end(0)
+    samples = {
+        'fake': np.zeros((nb_samples, 1,  16, 16)),
+        'tag3d': np.zeros((nb_samples, 1,  16, 16)),
+    }
+    vis = VisualiseTag3dAndFake(nb_samples=nb_samples, output_dir=str(tmpdir))
+    vis.on_train_begin(logs={'samples': samples})
+    vis.on_epoch_end(0, logs={'samples': samples})
 
 
 def test_d_score_histogram(outdir):
-    def generator(inputs):
-        return np.zeros((len(inputs['z']), 1, 64, 64))
-
-    def discriminator(data):
-        if (data == 0).all():   # fakes
-            d = np.random.normal(0.3, scale=0.2, size=(len(data), 1))
-        else:   # reals
-            d = np.random.normal(0.7, scale=0.2, size=(len(data), 1))
-        return np.clip(d, 0, 1)
-
+    bs = 64
+    d_score_fakes = np.clip(np.random.normal(0.3, scale=0.2, size=(bs, 1)), 0, 1)
+    d_score_reals = np.clip(np.random.normal(0.7, scale=0.2, size=(bs, 1)), 0, 1)
+    logs = {'samples': {
+        'discriminator_on_fake': d_score_fakes,
+        'discriminator_on_real': d_score_reals}
+    }
     out_path = str(outdir.join("d_score_hist"))
     os.makedirs(out_path, exist_ok=True)
-    nb_samples = 1000
-    z = np.random.random((nb_samples, 1))
-    real = np.ones((nb_samples, 1, 64, 64))
-    vis = DScoreHistogram(generator, discriminator, out_path, z, real)
-    vis.on_epoch_end(0)
+    vis = DScoreHistogram(out_path)
+    vis.on_epoch_end(0, logs)
     assert outdir.join("d_score_hist", "000.png").check()
+
+
+def test_store_samples(tmpdir):
+    dist = DistributionCollection(examplary_tag_distribution())
+    bs = 64
+    labels_record = dist.sample(bs)
+    labels_record = dist.normalize(labels_record)
+    labels = []
+    for name in labels_record.dtype.names:
+        labels.append(labels_record[name])
+    labels = np.concatenate(labels, axis=-1)
+    fakes = np.random.random((bs, 1, 8, 8))
+    store = StoreSamples(str(tmpdir), dist)
+    store.on_epoch_end(0, logs={'samples': {'labels': labels, 'fake': fakes}})
+    assert tmpdir.join("00000.hdf5").exists()

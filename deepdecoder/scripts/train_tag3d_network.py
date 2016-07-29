@@ -21,7 +21,7 @@ from deepdecoder.data import DistributionHDF5Dataset
 
 from diktya.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
     SaveModels
-from diktya.visualise import zip_tile
+from diktya.numpy import zip_tile
 from diktya.func_api_helpers import save_model
 
 from keras.models import Model
@@ -38,12 +38,11 @@ import seaborn as sns  # noqa
 
 def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
         nb_epoch, filter_size, project_factor, nb_dense):
-    batch_size = 32
+    batch_size = 64
     basename = "network_tags3d_n{}_d{}_e{}".format(nb_units, depth, nb_epoch)
     output_basename = os.path.join(output_dir, basename)
 
     tag_dataset = DistributionHDF5Dataset(tags_3d_hdf5_fname)
-    tag_distribution = tag_dataset.attrs['distribution']
 
     print("Got {} images from the 3d model".format(tag_dataset.nb_samples))
     weights_fname = output_basename + ".hdf5"
@@ -53,8 +52,12 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
         os.remove(weights_fname)
     os.makedirs(output_dir, exist_ok=True)
 
-    gen = tag_dataset.iter(batch_size)
-    nb_input = next(gen)[0].shape[1]
+    def generator(batch_size):
+        for batch in tag_dataset.iter(batch_size):
+            labels = batch['labels'].astype(np.float32)
+            yield labels, [batch['tag3d'], batch['depth_map']]
+
+    nb_input = next(generator(batch_size))[0].shape[1]
 
     x = Input(shape=(nb_input,))
     mask, depth_map = tag3d_network_dense(x, nb_units=nb_units, depth=depth,
@@ -68,12 +71,12 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
         optimizer, 'loss', epoch_patience=12, min_improvment=0.0002)
     history = HistoryPerBatch()
     save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir,
-                      hdf5_attrs={'distribution': tag_distribution})
-    g.fit_generator(gen, samples_per_epoch=300*batch_size,
+                      hdf5_attrs=tag_dataset.get_distribution_hdf5_attrs())
+    g.fit_generator(generator(batch_size), samples_per_epoch=200*batch_size,
                     nb_epoch=nb_epoch, verbose=1, callbacks=[scheduler, save, history])
 
     nb_visualize = 18**2
-    vis_labels, (tags_3d, depth_map) = next(tag_dataset.iter(nb_visualize))
+    vis_labels, (tags_3d, depth_map) = next(generator(nb_visualize))
     predict_tags_3d, predict_depth_map = g.predict(vis_labels)
 
     def zip_and_save(fname, *args):
@@ -86,8 +89,7 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     zip_and_save(output_basename + "_predict_tags.png", tags_3d, predict_tags_3d)
     zip_and_save(output_basename + "_predict_depth_map.png", depth_map, predict_depth_map)
 
-    save_model(g, weights_fname, attrs={'distribution': tag_distribution})
-
+    save_model(g, weights_fname, attrs=tag_dataset.get_distribution_hdf5_attrs())
     with open(output_basename + '.json', 'w+') as f:
         f.write(g.to_json())
 

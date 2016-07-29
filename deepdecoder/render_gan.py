@@ -15,20 +15,18 @@
 from deepdecoder.networks import get_label_generator, \
     get_lighting_generator, get_preprocess, get_blur_factor, \
     get_offset_back, get_offset_front, get_offset_middle, \
-    render_gan_discriminator, get_details, \
-    render_gan_discriminator_resnet, \
-    MinCoveredRegularizer
+    render_gan_discriminator, get_details
 from deepdecoder.layers import ThresholdBits, NormSinCosAngle
-from deepdecoder.data import real_generator
+from deepdecoder.data import real_generator, DistributionHDF5Dataset, get_distribution_hdf5_attrs
 from diktya.gan import GAN
 from diktya.callbacks import VisualiseGAN, LearningRateScheduler, HistoryPerBatch, \
-    OnEpochEnd
-from diktya.numpy import tile, zip_tile, image_save
-from diktya.func_api_helpers import concat, save_model, load_model, predict_wrapper
+    OnEpochEnd, SampleGAN
+from diktya.numpy import tile, zip_tile, scipy_gaussian_filter_2d
+from diktya.func_api_helpers import concat, save_model, load_model, predict_wrapper, \
+    name_tensor
 
 from keras.optimizers import Adam
 from keras.callbacks import Callback
-from keras.utils.generic_utils import Progbar
 from keras.engine.topology import Input, merge
 from keras.engine.training import Model
 import keras.backend as K
@@ -39,14 +37,13 @@ import seaborn as sns
 from collections import OrderedDict
 
 from deepdecoder.transform import PyramidBlending, PyramidReduce, \
-    GaussianBlur, AddLighting, Segmentation, HighPass
+    GaussianBlur, AddLighting, Segmentation, HighPass, BlendingBlur
 
 from diktya.layers.core import Subtensor, InBounds, ZeroGradient
 
 import numpy as np
 import os
 from os.path import join
-import h5py
 
 
 class SaveGAN(Callback):
@@ -70,60 +67,37 @@ class SaveGAN(Callback):
 
 
 class VisualiseTag3dAndFake(VisualiseGAN):
-    def __init__(self, visualise_fn, **kwargs):
-        self.batch_size = 10
-        self.visualise_fn = visualise_fn
-        super().__init__(**kwargs)
-
-    def should_visualise(self, i):
-        return i % 10 == 0 or i < 20
-
-    def __call__(self, fname=None):
-        outs = self.visualise_fn({'z': self.z}, batch_size=self.batch_size)
+    def call(self, samples):
         tiles = []
-        for tag3d, fake in zip(self.preprocess(outs['tag3d']),
-                               self.preprocess(outs['fake'])):
+        for tag3d, fake in zip(self.preprocess(samples['tag3d']),
+                               self.preprocess(samples['fake'])):
             tiles.append(2*np.clip(tag3d, 0, 1) - 1)
             tiles.append(fake)
-        tiled = tile(tiles, columns_must_be_multiple_of=2)
-        if fname is not None:
-            image_save(fname, tiled)
+        return tile(tiles, columns_must_be_multiple_of=2)
 
 
 class VisualiseFakesSorted(VisualiseGAN):
-    def __init__(self, visualise_fn, discriminator_fn, **kwargs):
-        self.batch_size = 10
-        self.visualise_fn = visualise_fn
-        self.discriminator_fn = discriminator_fn
-        super().__init__(**kwargs)
-
-    def should_visualise(self, i):
-        return i % 10 == 0 or i < 20
-
-    def __call__(self, fname=None):
-        outs = self.visualise_fn({'z': self.z}, batch_size=self.batch_size)
-        fakes = outs['fake']
-        scores = self.discriminator_fn(fakes)
+    def call(self, samples):
+        fakes = samples['fake']
+        scores = samples['discriminator_on_fake']
         idx = np.argsort(scores.flatten())[::-1]
         fakes_sorted = fakes[idx]
-        tiled = tile(self.preprocess(fakes_sorted))
-        image_save(fname, tiled)
+        return tile(self.preprocess(fakes_sorted))
+
+
+class VisualiseRealsSorted(VisualiseGAN):
+    def call(self, samples):
+        real = samples['real']
+        scores = samples['discriminator_on_real']
+        idx = np.argsort(scores.flatten())[::-1]
+        real_sorted = real[idx]
+        return tile(self.preprocess(real_sorted))
 
 
 class VisualiseAll(VisualiseGAN):
-    def __init__(self, visualise_fn, **kwargs):
-        self.batch_size = 10
-        self.visualise_fn = visualise_fn
-        super().__init__(**kwargs)
-
-    def should_visualise(self, i):
-        return i % 10 == 0 or i < 20
-
-    def __call__(self, fname=None):
-        outs = self.visualise_fn({'z': self.z}, batch_size=self.batch_size)
-        out_arrays = [self.preprocess(o) for o in outs.values() if o.shape[1:] == (1, 64, 64)]
-        tiled = zip_tile(*out_arrays)
-        image_save(fname, tiled)
+    def call(self, samples):
+        out_arrays = [self.preprocess(o) for o in samples.values() if o.shape[1:] == (1, 64, 64)]
+        return zip_tile(*out_arrays)
 
 
 def render_gan_custom_objects():
@@ -139,7 +113,8 @@ def render_gan_custom_objects():
         'InBounds': InBounds,
         'NormSinCosAngle': NormSinCosAngle,
         'PyramidBlending': PyramidBlending,
-        'PyramidReduce': PyramidReduce
+        'PyramidReduce': PyramidReduce,
+        'BlendingBlur': BlendingBlur,
     }
 
 
@@ -179,7 +154,7 @@ class RenderGAN:
 
     def _build_discriminator(self):
         x = Input(shape=self.data_shape, name='data')
-        d = render_gan_discriminator(x, n=self.discriminator_units, conv_repeat=2, dense=[512])
+        d = render_gan_discriminator(x, n=self.discriminator_units, conv_repeat=2)
         self.discriminator = Model([x], [d])
 
     def _build_generator_given_z_offset_and_labels(self):
@@ -200,6 +175,8 @@ class RenderGAN:
         tag3d_downsampled = PyramidReduce()(tag3d)
         tag3d_segmented = segmentation(tag3d)
         outputs['tag3d_segmented'] = tag3d_segmented
+        tag3d_segmented_blur = GaussianBlur(sigma=3.0)(tag3d_segmented)
+        outputs['tag3d_segmented_blur'] = tag3d_segmented_blur
 
         out_offset_front = get_offset_front([z_offset, ZeroGradient()(labels_without_bits)],
                                             self.generator_units)
@@ -208,11 +185,6 @@ class RenderGAN:
                                          nb_conv_layers=2)
         light_outs = get_lighting_generator([out_offset_front, light_depth_map],
                                             self.generator_units)
-        tag3d_lighten = AddLighting(
-            scale_factor=0.6, shift_factor=0.75,
-            name='tag3d_lighten')([tag3d] + light_outs)
-
-        outputs['tag3d_lighten'] = tag3d_lighten
 
         offset_depth_map = get_preprocess(tag3d_depth_map, self.preprocess_units,
                                           nb_conv_layers=2)
@@ -229,27 +201,34 @@ class RenderGAN:
         offset_back_feature_map, out_offset_back = get_offset_back(
             [out_offset_middle, offset_back_tag3d_downsampled], self.generator_units)
 
-        # mask_weight64 = get_blur_factor(out_offset_middle)
+        tag3d_lighten = AddLighting(
+            scale_factor=0.6, shift_factor=0.75)([tag3d] + light_outs)
+
+        blur_factor = get_blur_factor(out_offset_middle, min=0.05, max=1.0)
+        outputs['tag3d_lighten'] = tag3d_lighten
+        tag3d_blur = BlendingBlur()([tag3d_lighten, blur_factor])
+        outputs['tag3d_blur'] = tag3d_blur
         blending = PyramidBlending(offset_pyramid_layers=1,
                                    mask_pyramid_layers=1,
                                    mask_weights=[1],
                                    offset_weights=[1],
                                    use_selection=[True],
                                    name='blending')(
-                [out_offset_back, tag3d_lighten, tag3d_segmented])
+                [out_offset_back, tag3d_blur, tag3d_segmented_blur])
 
+        outputs['fake_without_noise'] = blending
         details = get_details(
-            [blending, tag3d_segmented, tag3d, out_offset_back,
+            [blending, tag3d_segmented_blur, tag3d, out_offset_back,
              offset_back_feature_map] + light_outs, self.generator_units)
-
         outputs['details_offset'] = details
-        details_high_pass = HighPass(4, nb_steps=4, name='details_high_pass')(details)
-        fake = InBounds(-1.0, 1.0, name='fake')(
+        details_high_pass = HighPass(4, nb_steps=4)(details)
+        outputs['details_high_pass'] = details_high_pass
+        fake = InBounds(-1.0, 1.0)(
             merge([details_high_pass, blending], mode='sum'))
         outputs['fake'] = fake
-        self.generator_given_z_and_labels = Model([z_offset, labels], [fake])
-        # errors: fake
-        # ok: tag3d, light_depth_map, lights_outs[0], tag3d_lighten
+        for name in outputs.keys():
+            outputs[name] = name_tensor(outputs[name], name)
+
         self.generator_given_z_and_labels = Model([z_offset, labels], [fake])
         self.sample_generator_given_z_and_labels_output_names = list(outputs.keys())
         self.sample_generator_given_z_and_labels = Model([z_offset, labels],
@@ -285,6 +264,9 @@ class RenderGAN:
         self.generator_given_z = Model([z], [fake])
 
         sample_tensors = self.sample_generator_given_z_and_labels([z_offset, labels])
+        sample_tensors = [name_tensor(t, n)
+                          for t, n in zip(sample_tensors,
+                                          self.sample_generator_given_z_and_labels.output_names)]
         self.sample_generator_given_z_output_names = ['labels'] + \
             self.sample_generator_given_z_and_labels_output_names
         self.sample_generator_given_z = Model([z], [labels] + sample_tensors)
@@ -314,70 +296,105 @@ class RenderGAN:
         save("discriminator")
 
 
+class StoreSamples(Callback):
+    def __init__(self, output_dir, distribution, overwrite=False):
+        self.output_dir = output_dir
+        self.distribution = distribution
+        self.overwrite = overwrite
+
+    def store(self, outputs, fname):
+        store_outputs = {}
+        for name, arr in outputs.items():
+            if name == 'labels':
+                labels = arr.view(dtype=self.distribution.norm_dtype)
+                store_outputs['labels'] = labels
+            else:
+                store_outputs[name] = arr
+        nb_samples = len(store_outputs['fake'])
+        if os.path.exists(fname) and self.overwrite:
+            os.remove(fname)
+        dset = DistributionHDF5Dataset(
+            fname, self.distribution, nb_samples=nb_samples)
+
+        dset.append(**store_outputs)
+        dset.close()
+
+    def on_train_begin(self, epoch, logs={}):
+        if 'samples' in logs:
+            self.store(
+                logs['samples'],
+                os.path.join(self.output_dir, "on_train_begin.hdf5"))
+
+    def on_epoch_end(self, epoch, logs={}):
+        if 'samples' in logs:
+            self.store(
+                logs['samples'],
+                os.path.join(self.output_dir, "{:05d}.hdf5".format(epoch)))
+
+
 class DScoreHistogram(Callback):
-    def __init__(self, generate_fn, discriminator_fn, output_dir, z, real):
-        self.generate_fn = generate_fn
-        self.discriminator_fn = discriminator_fn
-        self.real = real
-        self.z = z
+    def __init__(self, output_dir):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def plot_discriminator_score(self):
-        fakes = self.generate_fn(inputs={'z': self.z})
-        d_fakes = self.discriminator_fn(fakes)
-        d_reals = self.discriminator_fn(self.real)
+    def plot_discriminator_score(self, samples):
         fig, axes = plt.subplots(figsize=(10, 10))
-        sns.distplot(d_fakes, bins=20, ax=axes, color='red',
-                     label='number of fake images', rug=True,
+        sns.distplot(samples['discriminator_on_fake'], bins=20, ax=axes,
+                     color='red', label='number of fake images',
                      axlabel='discriminator score')
-        sns.distplot(d_reals, bins=20, ax=axes, color='green',
-                     label='number of real images', rug=True,
+        sns.distplot(samples['discriminator_on_real'], bins=20, ax=axes, color='green',
+                     label='number of real images',
                      axlabel='discriminator score')
         axes.legend()
         return fig, axes
 
-    def on_epoch_end(self, epoch, log={}):
-        if epoch % 10 == 0:
-            fig, _ = self.plot_discriminator_score()
-            fname = join(self.output_dir, "{:^03}.png".format(epoch))
+    def on_epoch_end(self, epoch, logs={}):
+        if 'samples' in logs:
+            fig, _ = self.plot_discriminator_score(logs['samples'])
+            fname = join(self.output_dir, "{:03d}.png".format(epoch))
             fig.savefig(fname)
             plt.close(fig)
 
 
 def train_callbacks(rendergan, output_dir, nb_visualise, real_hdf5_fname,
-                    lr_schedule=None, hdf5_attrs={}):
-    save_gan_cb = SaveGAN(rendergan, join(output_dir, "models/{epoch:^03}/{name}.hdf5"),
-                          every_epoch=10, hdf5_attrs=hdf5_attrs)
+                    distribution, lr_schedule=None, overwrite=False):
+    save_gan_cb = SaveGAN(rendergan, join(output_dir, "models/{epoch:03d}/{name}.hdf5"),
+                          every_epoch=10, hdf5_attrs=get_distribution_hdf5_attrs(distribution))
+    nb_score = 1000
 
     sample_fn = predict_wrapper(rendergan.sample_generator_given_z.predict,
                                 rendergan.sample_generator_given_z_output_names)
+
+    real = next(train_data_generator(real_hdf5_fname, nb_score, 1))['data']
+
     vis_cb = VisualiseTag3dAndFake(
         nb_samples=nb_visualise // 2,
-        visualise_fn=sample_fn,
         output_dir=join(output_dir, 'visualise_tag3d_fake'),
         show=False,
         preprocess=lambda x: np.clip(x, -1, 1)
     )
     vis_all = VisualiseAll(
-        visualise_fn=sample_fn,
         nb_samples=nb_visualise // len(rendergan.sample_generator_given_z.outputs),
         output_dir=join(output_dir, 'visualise_all'),
         show=False,
         preprocess=lambda x: np.clip(x, -1, 1))
 
-    vis_sorted = VisualiseFakesSorted(
-        visualise_fn=sample_fn,
-        discriminator_fn=rendergan.discriminator.predict,
+    vis_fake_sorted = VisualiseFakesSorted(
         nb_samples=nb_visualise,
         output_dir=join(output_dir, 'visualise_fakes_sorted'),
         show=False,
         preprocess=lambda x: np.clip(x, -1, 1))
 
+    vis_real_sorted = VisualiseRealsSorted(
+        nb_samples=nb_visualise,
+        output_dir=join(output_dir, 'visualise_reals_sorted'),
+        show=False,
+        preprocess=lambda x: np.clip(x, -1, 1))
+
     def default_lr_schedule(lr):
         return {
-            100: lr / 4,
-            150: lr / 4**2,
+            150: lr / 4,
+            200: lr / 4**2,
             250: lr / 4**3,
         }
 
@@ -398,28 +415,32 @@ def train_callbacks(rendergan, output_dir, nb_visualise, real_hdf5_fname,
     hist = HistoryPerBatch(hist_dir)
 
     def history_plot(e, logs={}):
-        fig, _ = hist.plot(save_as="{:^03}.png".format(e))
+        fig, _ = hist.plot(save_as="{:03d}.png".format(e), metrics=['g_loss', 'd_loss'])
         plt.close(fig)  # allows fig to be garbage collected
     hist_save = OnEpochEnd(history_plot, every_nth_epoch=20)
 
+    sample_outdir = join(output_dir, 'samples')
+    os.makedirs(sample_outdir, exist_ok=True)
+    store_samples_cb = StoreSamples(sample_outdir, distribution, overwrite)
+
     dscore_outdir = join(output_dir, 'd_score_hist')
     os.makedirs(dscore_outdir, exist_ok=True)
+    dscore = DScoreHistogram(dscore_outdir)
 
-    nb_score = 1000
-    real = next(train_data_generator(real_hdf5_fname, nb_score, 1))['data']
-    dscore = DScoreHistogram(rendergan.gan.generate,
-                             rendergan.discriminator.predict,
-                             dscore_outdir, rendergan.gan.random_z(nb_score),
-                             real)
-
-    return [save_gan_cb, vis_cb, vis_sorted, vis_all, hist, hist_save, dscore] + lr_schedulers
+    nb_sample = max(nb_score, nb_visualise)
+    sample_cb = SampleGAN(sample_fn, rendergan.discriminator.predict,
+                          rendergan.gan.random_z(nb_sample), real,
+                          callbacks=[vis_cb, vis_fake_sorted, vis_all, vis_real_sorted,
+                                     dscore, store_samples_cb])
+    return [sample_cb, save_gan_cb, hist, hist_save] + lr_schedulers
 
 
 def train_data_generator(real_hdf5_fname, batch_size, z_dim):
-    for real in real_generator(real_hdf5_fname, batch_size, range=(-1, 1)):
-        z = np.random.uniform(-1, 1, (batch_size, z_dim)).astype(np.float32)
+    for data in real_generator(real_hdf5_fname, batch_size, range=(-1, 1)):
+        z = np.random.uniform(-1, 1, (3*batch_size, z_dim)).astype(np.float32)
+        # data = scipy_gaussian_filter_2d(real, sigma=2/3.)
         yield {
-            'data': real,
+            'data': data,
             'z': z,
         }
 
@@ -437,5 +458,5 @@ def train(rendergan, real_hdf5_fname, output_dir, callbacks=[],
     rendergan.gan.fit_generator(
         data_generator,
         nb_batches_per_epoch=100,
-        nb_epoch=nb_epoch, batch_size=batch_size,
+        nb_epoch=nb_epoch, batch_size=batch_size*4,
         verbose=1, callbacks=callbacks)

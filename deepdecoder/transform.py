@@ -213,13 +213,13 @@ class AddLighting(Layer):
         def norm_scale(a):
             return (a + 1) / 2
         x, scale_black, scale_white, shift = inputs
-        scale_black = norm_scale(scale_black)
-        black_selection = K.cast(x < 0.5, K.floatx())
-        white_selection = K.cast(x >= 0.5, K.floatx())
+        x = 2*(x - 0.5)
+        black_selection = K.cast(x < 0, K.floatx())
+        white_selection = 1 - black_selection
 
-        black_scaled = x*black_selection*(1 - scale_black*self.scale_factor)
-        white_scaled = x*white_selection*(1 - scale_white*self.scale_factor)
-        scaled = black_scaled + white_scaled
+        scale_black = scale_black * self.scale_factor + (1 - self.scale_factor)
+        scale_white = scale_white * self.scale_factor + (1 - self.scale_factor)
+        scaled = x*black_selection*scale_black + x*white_selection*scale_white
         return scaled + self.shift_factor*shift
 
     def get_config(self):
