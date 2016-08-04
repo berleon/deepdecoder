@@ -543,10 +543,9 @@ def render_gan_discriminator_resnet(x, n=32, conv_repeat=1, dense=[], out_activa
     ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
 
 
-def decoder_resnet(nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
+def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
+                   resnet_depth=(3, 4, 6, 3),
                    optimizer='adam'):
-    param_labels = ('z_rot_sin', 'z_rot_cos', 'y_rot', 'x_rot', 'center_x', 'center_y')
-
     def _bn_relu_conv(nb_filter, nb_row=3, nb_col=3, subsample=1):
         return sequential([
             BatchNormalization(mode=0, axis=1),
@@ -555,7 +554,7 @@ def decoder_resnet(nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
                           subsample=(subsample, subsample), init="he_normal", border_mode="same")
         ])
 
-    def f(nb_filter, x):
+    def f(nb_filter):
         return sequential([
             _bn_relu_conv(nb_filter),
             _bn_relu_conv(nb_filter),
@@ -563,34 +562,23 @@ def decoder_resnet(nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
     n = nb_filter
 
     input = Input(shape=data_shape)
-    x = _bn_relu_conv(n, subsample=2)(input)
-    for _ in range(3):
-        x = merge([x, f(n)(x)], mode='sum')
-
-    x = _bn_relu_conv(2*n, subsample=2)(x)
-    for _ in range(4):
-        x = merge([x, f(2*n)(x)], mode='sum')
-
-    x = _bn_relu_conv(2*n, subsample=2)(x)
-    for _ in range(6):
-        x = merge([x, f(2*n)(x)], mode='sum')
-
-    x = _bn_relu_conv(4*n, subsample=2)(x)
-    for _ in range(3):
-        x = merge([x, f(4*n)(x)], mode='sum')
+    for d in resnet_depth:
+        x = _bn_relu_conv(n, subsample=2)(input)
+        for _ in range(d):
+            x = merge([x, f(n)(x)], mode='sum')
 
     x = sequential([
         AveragePooling2D(pool_size=(4, 4), strides=(1, 1), border_mode="same"),
         Flatten(),
         Dense(256),
         ELU(),
-        BatchNormalization(mode=0),
+        BatchNormalization(mode=0, axis=1),
         Dropout(0.5),
     ])(x)
     ids = sequential([
         Dense(256),
         ELU(),
-        BatchNormalization(mode=0),
+        BatchNormalization(mode=0, axis=1),
         Dropout(0.5),
     ])(x)
 
@@ -604,15 +592,12 @@ def decoder_resnet(nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
     params = sequential([
         Dense(256),
         ELU(),
-        BatchNormalization(mode=0),
+        BatchNormalization(mode=0, axis=1),
         Dropout(0.5),
     ])(x)
 
-    outputs['z_rot'] = Dense(2, activation='tanh', name=name)(params)
-    losses['z_rot'] = 'mse'
-    param_labels = ('y_rot', 'x_rot', 'center_x', 'center_y')
-    for name in range(len(param_labels)):
-        outputs[name] = Dense(1, activation='tanh', name=name)(params)
+    for name, output_size in label_sizes:
+        outputs[name] = Dense(output_size, activation='tanh', name=name)(params)
         losses[name] = 'mse'
 
     def get_loss_weight(name):
@@ -621,7 +606,7 @@ def decoder_resnet(nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
         else:
             return 0.1
 
-    model = Model(input, outputs)
+    model = Model(input, list(outputs.values()))
     model.compile(optimizer, loss=list(losses.values()),
                   loss_weights={k: get_loss_weight(k) for k in losses.keys()})
     return model

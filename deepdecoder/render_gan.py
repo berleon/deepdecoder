@@ -154,7 +154,8 @@ class RenderGAN:
 
     def _build_discriminator(self):
         x = Input(shape=self.data_shape, name='data')
-        d = render_gan_discriminator(x, n=self.discriminator_units, conv_repeat=2)
+        d = render_gan_discriminator(x, n=self.discriminator_units,
+                                     conv_repeat=2, dense=[512])
         self.discriminator = Model([x], [d])
 
     def _build_generator_given_z_offset_and_labels(self):

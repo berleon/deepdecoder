@@ -34,9 +34,10 @@ def run(g_weights_fname, d_weights_fname, nb_samples, out_fname):
     os.makedirs(os.path.dirname(out_fname), exist_ok=True)
     dset = DistributionHDF5Dataset(out_fname, mode='w', nb_samples=nb_samples,
                                    distribution=dist)
-    batch_size = 64
+    batch_size = 100
     print(generator.output_names)
-    generator_predict = predict_wrapper(generator.predict, generator.output_names)
+    generator_predict = predict_wrapper(lambda x: generator.predict(x, batch_size),
+                                        generator.output_names)
 
     def sample_generator():
         z_shape = get_layer(generator.inputs[0]).batch_input_shape
@@ -44,7 +45,13 @@ def run(g_weights_fname, d_weights_fname, nb_samples, out_fname):
             z = np.random.uniform(-1, 1, (batch_size, ) + z_shape[1:])
             outs = generator_predict(z)
             outs['discriminator'] = discriminator.predict(outs['fake'])
-            outs['labels'] = outs['labels'].astype(dist.norm_dtype)
+            raw_labels = outs.pop('labels')
+            pos = 0
+            labels = np.zeros(len(raw_labels), dtype=dist.norm_dtype)
+            for name, size in dist.norm_nb_elems.items():
+                labels[name] = raw_labels[:, pos:pos+size]
+                pos += size
+            outs['labels'] = labels
             yield outs
 
     progbar = Progbar(nb_samples)

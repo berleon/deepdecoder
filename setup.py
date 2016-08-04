@@ -37,6 +37,7 @@ setup(
             'bb_train_tag3d_network = deepdecoder.scripts.train_tag3d_network:main',
             'bb_train_rendergan = deepdecoder.scripts.train_render_gan:main',
             'bb_sample_artificial_trainset = deepdecoder.scripts.sample_artificial_trainset:main',
+            'bb_train_decoder = deepdecoder.scripts.train_decoder:main',
         ]
     },
     packages=[

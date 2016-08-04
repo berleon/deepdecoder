@@ -122,7 +122,6 @@ class HDF5Dataset(h5py.File):
         else:
             self.nb_samples = nb_samples
             self.attrs['__nb_samples'] = nb_samples
-        self.chunk_size = 2**16   # ~64kB
         self.create_dataset_kwargs = {
             'compression': 'gzip'
         }
@@ -139,14 +138,9 @@ class HDF5Dataset(h5py.File):
         self.attrs['dataset_names'] = [k.encode('utf-8') for k in kwargs.keys()]
         for name, array in kwargs.items():
             shape = array.shape[1:]
-            size_one_elem = np.prod(shape)
-            nb_chunks = self._nearest_power_of_two(self.chunk_size / size_one_elem)
-            nb_chunks = min(nb_chunks, self.nb_samples)
             self.create_dataset(name,
                                 shape=(self.nb_samples,) + shape,
-                                dtype=str(array.dtype),
-                                chunks=(nb_chunks,) + shape,
-                                compression='gzip')
+                                dtype=str(array.dtype))
         self.dataset_created = True
         self._append_pos = 0
 
@@ -186,15 +180,21 @@ class HDF5Dataset(h5py.File):
             if self._append_pos >= self.nb_samples:
                 break
 
-    def iter(self, batch_size):
+    def iter(self, batch_size, names=None):
         i = 0
-        dataset_names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
+        if names is None:
+            names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
+
         while True:
-            yield {
-                name: self[name][i:i+batch_size]
-                for name in dataset_names
-            }
-            i = (i + batch_size) % (self.nb_samples - batch_size)
+            size = batch_size
+            batch = {name: [] for name in names}
+            while size > 0:
+                nb = min(self.nb_samples, i + size) - i
+                for name in names:
+                    batch[name].append(self[name][i:i + nb])
+                size -= nb
+                i = (i + nb) % self.nb_samples
+            yield {name: np.concatenate(arrs) for name, arrs in batch.items()}
 
 
 def h5_add_distribution(f, distribution):
@@ -246,11 +246,28 @@ class DistributionHDF5Dataset(HDF5Dataset):
             kwargs[label_name] = labels[label_name]
         return super().append(**kwargs)
 
-    def iter(self, batch_size):
+    def iter(self, batch_size, names=None):
         label_names = self.get_label_names()
         dist = self.get_tag_distribution()
-        for batch in super().iter(batch_size):
-            labels = [batch.pop(name) for name in label_names]
-            labels = np.concatenate(labels, axis=1)
-            batch['labels'] = labels.astype(dist.norm_dtype)
+        if names is None:
+            names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
+        if 'labels' in names:
+            del names[names.index('labels')]
+            names += dist.names
+            uses_labels = True
+        else:
+            uses_labels = False
+        if set(dist.names) < set(names):
+            uses_labels = True
+        elif any([n in names for n in dist.names]):
+            raise Exception(
+                "Got name some label names {}. But not all {}."
+                .format(', '.join([n for n in names if n in dist.names]), dist.names))
+
+        for batch in super().iter(batch_size, names):
+            if uses_labels:
+                labels = [(name, batch.pop(name)) for name in label_names]
+                batch['labels'] = np.zeros(len(labels[0][1]), dtype=dist.norm_dtype)
+                for name, label in labels:
+                    batch['labels'][name] = label
             yield batch
