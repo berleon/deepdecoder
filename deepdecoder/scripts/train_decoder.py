@@ -17,15 +17,14 @@ import matplotlib
 matplotlib.use('Agg')  # noqa
 
 import matplotlib.pyplot as plt
-from deepdecoder.render_gan import RenderGAN, train, train_callbacks, load_tag3d_network
 from deepdecoder.networks import decoder_resnet
 from deepdecoder.data import DistributionHDF5Dataset, get_distribution_hdf5_attrs
 import argparse
-import sys
 import os
 import numpy as np
 from keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import EarlyStopping, ModelCheckpoint, Callback
+from keras.callbacks import EarlyStopping, Callback
+from keras.optimizers import Nadam
 from diktya.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
     SaveModelAndWeightsCheckpoint
 from diktya.numpy import scipy_gaussian_filter_2d, image_save, tile
@@ -33,10 +32,7 @@ import h5py
 from skimage.exposure import equalize_hist
 import time
 import json
-
-
-param_labels = ('z_rot_sin', 'z_rot_cos', 'y_rot', 'x_rot', 'center_x', 'center_y')
-
+import seaborn as sns
 
 def add_noise(tags):
     sigmas = np.clip(np.random.normal(loc=0.07, scale=0.02, size=tags.shape[0]),
@@ -49,30 +45,27 @@ def add_noise(tags):
 
 
 def augmentation_data_generator(data_generator, data_name, label_names,
-                                noise=True):
+                                use_augmentation=True, noise=True):
     augmentation = ImageDataGenerator(
-        rotation_range=0.1,
-        width_shift_range=0.2,
-        height_shift_range=0.2,
-        shear_range=0.2*np.pi,
+        rotation_range=10.,
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        shear_range=0.1*np.pi,
         zoom_range=0.2,
-        channel_shift_range=0.3
+        channel_shift_range=0.5
     )
-
-    # augmentation.fit(next(data_generator(2048))[data_name])
 
     def wrapper(batch_size):
         for batch in data_generator(batch_size):
             data = batch[data_name]
-            augmented = next(augmentation.flow(data, batch_size=batch_size,
-                                               shuffle=False))
+            if use_augmentation:
+                data = next(augmentation.flow(data, batch_size=batch_size, shuffle=False))
+            if noise:
+                data = add_noise(data)
             labels = []
             for name in label_names:
                 labels.append(batch[name])
-            if noise:
-                augmented = add_noise(augmented)
-
-            yield augmented, labels
+            yield np.clip(data, -1, 1), labels
     return wrapper
 
 
@@ -92,7 +85,6 @@ def dataset_iterator(dataset, batch_size, names=None, d_threshold=0.05):
             continue
         for name in labels.dtype.names:
             batch[name] = labels[name]
-
         for name, arr in batch.items():
             if len(goodenough) == 1:
                 batch[name] = arr[goodenough, np.newaxis]
@@ -100,7 +92,6 @@ def dataset_iterator(dataset, batch_size, names=None, d_threshold=0.05):
                 batch[name] = arr[goodenough]
         assert len(batch['discriminator'].shape) == 2
         cache.append(batch)
-
         if nb_cached() >= batch_size:
             batch = {name: np.zeros((batch_size,) + arr.shape[1:])
                      for name, arr in cache[0].items()}
@@ -139,7 +130,6 @@ def zip_dataset_iterators(dataset_iters, batch_size):
     prefetch_factor = 10
     prefetch_batch_size = batch_size * prefetch_factor
     iterators = [d_iter(prefetch_batch_size) for d_iter in dataset_iters]
-
     for batches in zip(*iterators):
         pos = [0] * n
         for i in range(prefetch_factor):
@@ -188,7 +178,6 @@ def truth_generator(h5_truth, batch_size,
         if use_blur:
             tags = scipy_gaussian_filter_2d(tags, 2/3, axis=-1)
         tags = tags * 2 - 1
-
         labels = list(np.array([int_id_to_binary(i)[::-1]
                                 for i in truth_labels[idx:idx+batch_size]]).T)
         missing_labels = [np.zeros((batch_size, size), dtype=np.float32)
@@ -205,25 +194,31 @@ def hist_equalisation(generator):
         yield np.array(eq_imgs), labels
 
 
+class CollectValBitsLoss(Callback):
+    def on_epoch_end(self, epoch, log={}):
+        val_bits_loss = 0
+        nb_bits = 0
+        for name, loss in log.items():
+            if name.startswith('val_bit_'):
+                nb_bits += 1
+                val_bits_loss += loss
+        log['val_bits_loss'] = val_bits_loss / nb_bits
+
+
 class PlotHistory(Callback):
     def __init__(self, history_per_batch, outfile):
         self.history_per_batch = history_per_batch
         self.outfile = outfile
-        self.val_hist = {}
+        self.history_val_bits = []
 
     def on_epoch_end(self, epoch, log={}):
+        self.history_val_bits.append(log['val_bits_loss'])
         fig, ax = plt.subplots()
-        for name, loss in log.items():
-            if name.startswith('val_bit_'):
-                if name not in self.val_hist:
-                    self.val_hist[name] = []
-                self.val_hist[name].append(loss)
-
-        val_bit_loss = np.mean(list(self.val_hist.values()), axis=0)
-        ax.plot(np.arange(1, 1 + len(val_bit_loss)), val_bit_loss, label='val_bits')
-        self.history_per_batch.history['bits_loss'] = np.mean([
-            hist for n, hist in self.history_per_batch.history.items()
-            if n.startswith('bit_')], axis=0)
+        val_bit_loss = np.array(self.history_val_bits)
+        ax.plot(np.arange(1, 1 + len(val_bit_loss)), val_bit_loss, label='val_bits_loss')
+        self.history_per_batch.batch_history['bits_loss'] = np.mean([
+            hist for n, hist in self.history_per_batch.batch_history.items()
+            if n.startswith('bit_')], axis=0).tolist()
         self.history_per_batch.plot(metrics=['bits_loss'], fig=fig, axes=ax)
         fig.savefig(self.outfile)
         plt.close(fig)
@@ -235,12 +230,13 @@ def save_samples(data, bits, outfname):
         s = 64 // nb_bits
         for j in range(nb_bits):
             data[i, :s, s*j:s*(j+1)] = 2*bits[i, j] - 1
-    image_save(outfname, tile(data))
+    image_save(outfname, np.clip(tile(data), -1, 1))
 
 
 class DecoderTraining:
     def __init__(self, dataset_fnames, gt_fname, force, nb_epoch, nb_units,
-                 use_augmentation, use_noise, data_name, output_dir):
+                 use_augmentation, use_noise, use_hist_equalization,
+                 data_name, output_dir):
         self.dataset_fnames = dataset_fnames
         self.gt_fname = gt_fname
         self.force = force
@@ -250,6 +246,8 @@ class DecoderTraining:
         self.use_noise = use_noise
         self.data_name = data_name
         self.output_dir = output_dir
+        self.use_hist_equalization = use_hist_equalization
+        self._label_distribution = None
 
     def to_config(self):
         return {
@@ -260,14 +258,35 @@ class DecoderTraining:
             'nb_units':  self.nb_units,
             'use_augmentation':  self.use_augmentation,
             'use_noise':  self.use_noise,
+            'use_hist_equalization':  self.use_hist_equalization,
             'data_name':  self.data_name,
             'output_dir':  self.output_dir,
         }
+
+    def model_fname(self):
+        return os.path.join(self.output_dir, "decoder.hdf5")
 
     def save(self):
         fname = os.path.join(self.output_dir, 'training_params.json')
         with open(fname, 'w+') as f:
             json.dump(self.to_config(), f, indent=2)
+
+    def get_label_distributions(self):
+        datasets = [DistributionHDF5Dataset(fname) for fname in self.dataset_fnames]
+        if self._label_distribution is None:
+            for dset in datasets:
+                if self._label_distribution is None:
+                    self._label_distribution = dset.get_tag_distribution()
+                else:
+                    if self._label_distribution != dset.get_tag_distribution():
+                        raise Exception("Distribution of datasets must match")
+        return self._label_distribution
+
+    def get_label_output_sizes(self):
+        dist = self.get_label_distributions()
+        label_output_sizes = [(n, size) for n, size in dist.norm_nb_elems.items()
+                              if n != 'bits']
+        return label_output_sizes
 
     def summary(self):
         header = '#' * 30 + " - Decoder Summary - " + '#' * 30
@@ -282,78 +301,116 @@ class DecoderTraining:
         print("   nb units:         {}".format(self.nb_units))
         print("   use augmentation: {}".format(self.use_augmentation))
         print("   use noise:        {}".format(self.use_noise))
+        print("   use hist equal.:  {}".format(self.use_hist_equalization))
         print('#' * len(header))
 
+    def data_generator_factory(self):
+        datasets = [DistributionHDF5Dataset(fname) for fname in self.dataset_fnames]
+        dist = None
+        for dset in datasets:
+            if dist is None:
+                dist = dset.get_tag_distribution()
+            else:
+                if dist != dset.get_tag_distribution():
+                    raise Exception("Distribution of datasets must match")
+        label_output_sizes = self.get_label_output_sizes()
+        all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
+            [n for n, _ in label_output_sizes]
+        dataset_names = ['labels', 'discriminator', self.data_name]
+        dataset_iterators = [lambda bs: bit_split(dataset_iterator(dset, bs, dataset_names))
+                             for dset in datasets]
 
-def run(training_param):
-    tp = training_param
-    os.makedirs(tp.output_dir, exist_ok=tp.force)
-    tp.save()
-    tp.summary()
-    h5_truth = h5py.File(tp.gt_fname)
+        def data_generator(bs):
+            return zip_dataset_iterators(dataset_iterators, bs)
 
-    datasets = [DistributionHDF5Dataset(fname) for fname in tp.dataset_fnames]
-    dist = None
-
-    for dset in datasets:
-        if dist is None:
-            dist = dset.get_tag_distribution()
+        aug_gen = augmentation_data_generator(data_generator, self.data_name, all_label_names,
+                                              use_augmentation=self.use_augmentation,
+                                              noise=self.use_noise)
+        if self.use_hist_equalization:
+            return lambda bs: hist_equalisation(aug_gen(bs))
         else:
-            if dist != dset.get_tag_distribution():
-                raise Exception("Distribution of datasets must match")
+            return aug_gen
 
-    label_output_sizes = [(n, size) for n, size in dist.norm_nb_elems.items()
-                          if n != 'bits']
-    all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
-        [n for n, _ in label_output_sizes]
-    dataset_names = ['labels', 'discriminator', tp.data_name]
-    dataset_iterators = [lambda bs: bit_split(dataset_iterator(dset, bs, dataset_names)) for dset in datasets]
-    data_generator = lambda bs: zip_dataset_iterators(dataset_iterators, bs)
+    def truth_generator_factory(self, h5_truth, missing_label_sizes):
+        def wrapper(bs):
+            gen = truth_generator(h5_truth, bs, missing_label_sizes)
+            if self.use_hist_equalization:
+                return hist_equalisation(gen)
+            else:
+                return gen
+        return wrapper
 
-    aug_gen = augmentation_data_generator(data_generator, tp.data_name, all_label_names)
-    nb_vis_samples = 20**2
-    vis_out = next(hist_equalisation(aug_gen(nb_vis_samples)))
-    nb_bits = 12
-    vis_bits = np.array(vis_out[1][:nb_bits]).T
-    save_samples(vis_out[0][:, 0], vis_bits, os.path.join(tp.output_dir, "train_samples.png"))
+    def check_generator(self, gen, name):
+        x, y = next(gen)
+        fig, ax = plt.subplots()
+        sns.distplot(x.flatten(), ax=ax)
+        fig.savefig(os.path.join(self.output_dir,
+                                 "data_histogram_{}.png".format(name)))
+        plt.close(fig)
 
-    gt_data, gt_bits = next(hist_equalisation(
-        truth_generator(h5_truth, nb_vis_samples, missing_label_sizes=[])))
-    gt_bits = np.array(gt_bits).T
-    save_samples(gt_data[:, 0], gt_bits, os.path.join(tp.output_dir, "test_samples.png"))
+    def run(self):
+        marker = os.path.basename(self.output_dir)
+        os.makedirs(self.output_dir, exist_ok=self.force)
+        self.save()
+        self.summary()
+        # save samples
+        h5_truth = h5py.File(self.gt_fname)
+        nb_vis_samples = 20**2
+        data_gen = self.data_generator_factory()
+        truth_gen_only_bits = self.truth_generator_factory(h5_truth, missing_label_sizes=[])
+        check_samples = 100
+        self.check_generator(data_gen(check_samples), "train")
+        self.check_generator(truth_gen_only_bits(check_samples), "test")
+        vis_out = next(data_gen(nb_vis_samples))
+        nb_bits = 12
+        vis_bits = np.array(vis_out[1][:nb_bits]).T
+        save_samples(vis_out[0][:, 0], vis_bits,
+                     os.path.join(self.output_dir, marker + "_train_samples.png"))
+        gt_data, gt_bits = next(truth_gen_only_bits(nb_vis_samples))
+        gt_bits = np.array(gt_bits).T
+        save_samples(gt_data[:, 0], gt_bits,
+                     os.path.join(self.output_dir, marker + "_test_samples.png"))
+        # build model
+        bs = 128
+        label_output_sizes = self.get_label_output_sizes()
+        model = decoder_resnet(label_output_sizes, nb_filter=self.nb_units,
+                               resnet_depth=[3, 6, 4, 3], optimizer='nadam')
+        # setup training
+        hist = HistoryPerBatch(self.output_dir)
+        stopper = EarlyStopping(monitor='val_bits_loss', patience=35, verbose=0, mode='auto')
+        scheduler = AutomaticLearningRateScheduler(
+            model.optimizer, 'loss', epoch_patience=7, min_improvement=0.001,
+            factor=0.25)
+        checkpointer = SaveModelAndWeightsCheckpoint(
+            os.path.join(self.output_dir, 'decoder.hdf5'), monitor='val_loss',
+            verbose=0, save_best_only=True,
+            hdf5_attrs=get_distribution_hdf5_attrs(self.get_label_distributions()))
+        nb_batches_per_epoch = 1000
+        plot_history = PlotHistory(hist, os.path.join(self.output_dir, marker + '_loss.png'))
+        # train
+        truth_gen = self.truth_generator_factory(h5_truth, label_output_sizes)
+        model.fit_generator(
+            data_gen(bs),
+            samples_per_epoch=bs*nb_batches_per_epoch, nb_epoch=self.nb_epoch,
+            callbacks=[scheduler, checkpointer, hist, CollectValBitsLoss(),
+                       plot_history, stopper],
+            validation_data=truth_gen(bs),
+            nb_val_samples=h5_truth['tags'].shape[0],
+            nb_worker=1, max_q_size=4*10, pickle_safe=False
+        )
+        self.summary()
 
-    bs = 128
-    model = decoder_resnet(label_output_sizes, nb_filter=tp.nb_units,
-                           resnet_depth=[3, 6, 4, 3], optimizer='sgd')
-    # model.summary()
-    hist = HistoryPerBatch(tp.output_dir)
-    stopper = EarlyStopping(monitor='val_loss', patience=25, verbose=0, mode='auto')
-    scheduler = AutomaticLearningRateScheduler(
-        model.optimizer, 'loss', epoch_patience=3, min_improvement=0.2,
-        factor=0.25)
-    checkpointer = SaveModelAndWeightsCheckpoint(
-        os.path.join('decoder.hdf5'), monitor='val_loss', verbose=0,
-        save_best_only=True, hdf5_attrs=get_distribution_hdf5_attrs(dist))
-    nb_batches_per_epoch = 1000
-    plot_history = PlotHistory(hist, os.path.join(tp.output_dir, 'loss.png'))
 
-    model.fit_generator(
-        hist_equalisation(aug_gen(bs)),
-        samples_per_epoch=bs*nb_batches_per_epoch, nb_epoch=tp.nb_epoch,
-        callbacks=[scheduler, checkpointer, stopper, hist, plot_history],
-        validation_data=hist_equalisation(truth_generator(h5_truth, bs, label_output_sizes)),
-        nb_val_samples=h5_truth['tags'].shape[0],
-        nb_worker=1, max_q_size=4*10, pickle_safe=False
-    )
-
-
-def get_output_dir(output_dir, units, augmentation, noise, dataset_name):
-    t = time.gmtime()
+def get_output_dir(output_dir, units, augmentation, noise, hist_eq, dataset_name, marker):
     name = "decoder_{}_n{}".format(dataset_name, units)
     if augmentation:
         name += "_aug"
     if noise:
         name += "_noise"
+    if hist_eq:
+        name += "_hist_eq"
+    if marker:
+        name += "_" + marker
     name += time.strftime("_%Y-%m-%dT%H:%MZ", time.gmtime())
 
     return os.path.join(output_dir, name)
@@ -381,8 +438,12 @@ def main():
                         help='get the images from this dataset.')
     parser.add_argument('-a', '--augmentation', action='store_true',
                         help='use augmentation.')
+    parser.add_argument('-m', '--marker', type=str, default="",
+                        help='marker for the output dir.')
     parser.add_argument('-n', '--noise', action='store_true',
                         help='add gaussian noise to the images.')
+    parser.add_argument('--hist-eq', action='store_true',
+                        help='use histogram equalization.')
     parser.add_argument('-f', '--force', action='store_true',
                         help='override existing output files')
     parser.add_argument('output_dir', type=as_abs_path,
@@ -390,11 +451,13 @@ def main():
     args = parser.parse_args()
     print(args.train_set)
     output_dir = get_output_dir(
-        args.output_dir, args.units, args.augmentation, args.noise, args.dataset_name)
+        args.output_dir, args.units, args.augmentation,
+        args.noise, args.hist_eq, args.dataset_name, args.marker)
 
     dt = DecoderTraining(args.train_set, args.gt, args.force, args.epoch, args.units,
-                         args.augmentation, args.noise, args.dataset_name, output_dir)
-    run(dt)
+                         args.augmentation, args.noise, args.hist_eq,
+                         args.dataset_name, output_dir)
+    dt.run()
 
 if __name__ == "__main__":
     main()
