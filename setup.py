@@ -31,6 +31,7 @@ setup(
     dependency_links=dep_links,
     entry_points={
         'console_scripts': [
+            'bb_extract_hd_images = deepdecoder.scripts.extract_hd_images:main',
             'bb_generate_3d_tags = deepdecoder.scripts.generate_3d_tags:main',
             'bb_default_3d_tags_distribution = ' +
                 'deepdecoder.scripts.default_3d_tags_distribution:main',
@@ -38,6 +39,7 @@ setup(
             'bb_train_rendergan = deepdecoder.scripts.train_render_gan:main',
             'bb_sample_artificial_trainset = deepdecoder.scripts.sample_artificial_trainset:main',
             'bb_train_decoder = deepdecoder.scripts.train_decoder:main',
+            'bb_evalute_decoder = deepdecoder.scripts.evaluate_decoder:main',
         ]
     },
     packages=[

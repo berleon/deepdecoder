@@ -36,7 +36,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import OrderedDict
 
-from deepdecoder.transform import PyramidBlending, PyramidReduce, \
+from deepdecoder.transform import Background, PyramidReduce, \
     GaussianBlur, AddLighting, Segmentation, HighPass, BlendingBlur
 
 from diktya.layers.core import Subtensor, InBounds, ZeroGradient
@@ -112,7 +112,7 @@ def render_gan_custom_objects():
         'ZeroGradient': ZeroGradient,
         'InBounds': InBounds,
         'NormSinCosAngle': NormSinCosAngle,
-        'PyramidBlending': PyramidBlending,
+        'Background': Background,
         'PyramidReduce': PyramidReduce,
         'BlendingBlur': BlendingBlur,
     }
@@ -203,19 +203,13 @@ class RenderGAN:
             [out_offset_middle, offset_back_tag3d_downsampled], self.generator_units)
 
         tag3d_lighten = AddLighting(
-            scale_factor=0.6, shift_factor=0.75)([tag3d] + light_outs)
+            scale_factor=0.75, shift_factor=0.75)([tag3d] + light_outs)
 
         blur_factor = get_blur_factor(out_offset_middle, min=0.05, max=1.0)
         outputs['tag3d_lighten'] = tag3d_lighten
-        tag3d_blur = BlendingBlur()([tag3d_lighten, blur_factor])
+        tag3d_blur = BlendingBlur(sigma=1)([tag3d_lighten, blur_factor])
         outputs['tag3d_blur'] = tag3d_blur
-        blending = PyramidBlending(offset_pyramid_layers=1,
-                                   mask_pyramid_layers=1,
-                                   mask_weights=[1],
-                                   offset_weights=[1],
-                                   use_selection=[True],
-                                   name='blending')(
-                [out_offset_back, tag3d_blur, tag3d_segmented_blur])
+        blending = Background(name='blending')([out_offset_back, tag3d_blur, tag3d_segmented_blur])
 
         outputs['fake_without_noise'] = blending
         details = get_details(

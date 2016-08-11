@@ -252,6 +252,17 @@ class HighPass(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class Background(Layer):
+    def get_output_shape_for(self, input_shapes):
+        offset_shape, mask_shape, selection_shape = input_shapes[:3]
+        assert mask_shape == selection_shape
+        return offset_shape
+
+    def call(self, inputs, mask=None):
+        background, forground, segmentation = inputs
+        return background * segmentation + forground * (1 - segmentation)
+
+
 class PyramidBlending(Layer):
     def __init__(self, offset_pyramid_layers=3,
                  mask_pyramid_layers=3,
@@ -313,7 +324,6 @@ class PyramidBlending(Layer):
 
         nb_fix_inputs = 3
         offset, mask, segmentation = inputs[:nb_fix_inputs]
-        mask = 2*mask - 1
 
         idx = nb_fix_inputs
         nb_variable_offsets = len([w for w in self.offset_weights

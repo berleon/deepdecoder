@@ -28,21 +28,6 @@ from scipy.ndimage.interpolation import zoom
 from scipy.ndimage.filters import gaussian_filter1d
 from scipy.misc import imsave
 from deepdecoder.scripts.default_3d_tags_distribution import default_tag_distribution
-from queue import Queue
-import threading
-import multiprocessing
-from joblib import Parallel
-
-
-def _run_generator(generator, queue):
-    for x in generator():
-        queue.put(x)
-
-
-def parallel(generator):
-    p = Parallel(n_jobs=-1)
-    p(generator())
-        # TODO: join threads
 
 
 def generator(tag_dist, batch_size, antialiasing=1):
