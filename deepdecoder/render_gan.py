@@ -327,6 +327,17 @@ class StoreSamples(Callback):
                 os.path.join(self.output_dir, "{:05d}.hdf5".format(epoch)))
 
 
+def plot_discriminator_score(samples, axes, kde=True):
+    sns.distplot(samples['discriminator_on_fake'], bins=15, ax=axes, kde=kde,
+                 color='red', label='fake',
+                 kde_kws={'clip': (0, 1)})
+    sns.distplot(samples['discriminator_on_real'], bins=15, ax=axes, kde=kde,
+                 color='green', label='real',
+                 kde_kws={'clip': (0, 1)},
+                 axlabel='Discriminator score')
+    axes.legend()
+
+
 class DScoreHistogram(Callback):
     def __init__(self, output_dir):
         self.output_dir = output_dir
@@ -334,13 +345,7 @@ class DScoreHistogram(Callback):
 
     def plot_discriminator_score(self, samples):
         fig, axes = plt.subplots(figsize=(10, 10))
-        sns.distplot(samples['discriminator_on_fake'], bins=20, ax=axes,
-                     color='red', label='number of fake images',
-                     axlabel='discriminator score')
-        sns.distplot(samples['discriminator_on_real'], bins=20, ax=axes, color='green',
-                     label='number of real images',
-                     axlabel='discriminator score')
-        axes.legend()
+        plot_discriminator_score(samples, axes)
         return fig, axes
 
     def on_epoch_end(self, epoch, logs={}):
