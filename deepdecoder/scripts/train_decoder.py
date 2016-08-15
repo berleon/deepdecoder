@@ -24,15 +24,16 @@ import os
 import numpy as np
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, Callback
-from keras.optimizers import Nadam
+from keras.optimizers import Nadam, SGD
 from diktya.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
-    SaveModelAndWeightsCheckpoint
+    SaveModelAndWeightsCheckpoint, OnEpochEnd
 from diktya.numpy import scipy_gaussian_filter_2d, image_save, tile
 import h5py
 from skimage.exposure import equalize_hist
 import time
 import json
 import seaborn as sns
+
 
 def add_noise(tags):
     sigmas = np.clip(np.random.normal(loc=0.07, scale=0.02, size=tags.shape[0]),
@@ -48,9 +49,9 @@ def augmentation_data_generator(data_generator, data_name, label_names,
                                 use_augmentation=True, noise=True):
     augmentation = ImageDataGenerator(
         rotation_range=10.,
-        width_shift_range=0.1,
-        height_shift_range=0.1,
-        shear_range=0.1*np.pi,
+        width_shift_range=0.15,
+        height_shift_range=0.15,
+        shear_range=0.15*np.pi,
         zoom_range=0.2,
         channel_shift_range=0.5
     )
@@ -194,34 +195,22 @@ def hist_equalisation(generator):
         yield np.array(eq_imgs), labels
 
 
-class CollectValBitsLoss(Callback):
-    def on_epoch_end(self, epoch, log={}):
-        val_bits_loss = 0
+class CollectBitsLoss(Callback):
+    @staticmethod
+    def _collect_loss(logs, start_marker):
+        total_loss = 0
         nb_bits = 0
-        for name, loss in log.items():
-            if name.startswith('val_bit_'):
+        for name, loss in logs.items():
+            if name.startswith(start_marker):
                 nb_bits += 1
-                val_bits_loss += loss
-        log['val_bits_loss'] = val_bits_loss / nb_bits
+                total_loss += loss
+        return total_loss / nb_bits
 
+    def on_batch_end(self, batch, logs={}):
+        logs['bits_loss'] = self._collect_loss(logs, 'bit_')
 
-class PlotHistory(Callback):
-    def __init__(self, history_per_batch, outfile):
-        self.history_per_batch = history_per_batch
-        self.outfile = outfile
-        self.history_val_bits = []
-
-    def on_epoch_end(self, epoch, log={}):
-        self.history_val_bits.append(log['val_bits_loss'])
-        fig, ax = plt.subplots()
-        val_bit_loss = np.array(self.history_val_bits)
-        ax.plot(np.arange(1, 1 + len(val_bit_loss)), val_bit_loss, label='val_bits_loss')
-        self.history_per_batch.batch_history['bits_loss'] = np.mean([
-            hist for n, hist in self.history_per_batch.batch_history.items()
-            if n.startswith('bit_')], axis=0).tolist()
-        self.history_per_batch.plot(metrics=['bits_loss'], fig=fig, axes=ax)
-        fig.savefig(self.outfile)
-        plt.close(fig)
+    def on_epoch_end(self, epoch, logs={}):
+        logs['val_bits_loss'] = self._collect_loss(logs, 'val_bit_')
 
 
 def save_samples(data, bits, outfname):
@@ -264,10 +253,10 @@ class DecoderTraining:
         }
 
     def model_fname(self):
-        return os.path.join(self.output_dir, "decoder.hdf5")
+        return self.outname("decoder.hdf5")
 
     def save(self):
-        fname = os.path.join(self.output_dir, 'training_params.json')
+        fname = self.outname('training_params.json')
         with open(fname, 'w+') as f:
             json.dump(self.to_config(), f, indent=2)
 
@@ -287,6 +276,9 @@ class DecoderTraining:
         label_output_sizes = [(n, size) for n, size in dist.norm_nb_elems.items()
                               if n != 'bits']
         return label_output_sizes
+
+    def outname(self, *args):
+        return os.path.join(self.output_dir, *args)
 
     def summary(self):
         header = '#' * 30 + " - Decoder Summary - " + '#' * 30
@@ -344,8 +336,7 @@ class DecoderTraining:
         x, y = next(gen)
         fig, ax = plt.subplots()
         sns.distplot(x.flatten(), ax=ax)
-        fig.savefig(os.path.join(self.output_dir,
-                                 "data_histogram_{}.png".format(name)))
+        fig.savefig(self.outname("data_histogram_{}.png".format(name)))
         plt.close(fig)
 
     def run(self):
@@ -365,35 +356,39 @@ class DecoderTraining:
         nb_bits = 12
         vis_bits = np.array(vis_out[1][:nb_bits]).T
         save_samples(vis_out[0][:, 0], vis_bits,
-                     os.path.join(self.output_dir, marker + "_train_samples.png"))
+                     self.outname( marker + "_train_samples.png"))
         gt_data, gt_bits = next(truth_gen_only_bits(nb_vis_samples))
         gt_bits = np.array(gt_bits).T
         save_samples(gt_data[:, 0], gt_bits,
-                     os.path.join(self.output_dir, marker + "_test_samples.png"))
+                     self.outname(marker + "_test_samples.png"))
         # build model
         bs = 128
         label_output_sizes = self.get_label_output_sizes()
         model = decoder_resnet(label_output_sizes, nb_filter=self.nb_units,
-                               resnet_depth=[3, 6, 4, 3], optimizer='nadam')
+                               resnet_depth=[3, 6, 4, 3],
+                               optimizer=SGD(momentum=0.9, nesterov=True))
         # setup training
-        hist = HistoryPerBatch(self.output_dir)
+        hist = HistoryPerBatch(self.output_dir, extra_metrics=['bits_loss', 'val_bits_loss'])
+        hist_saver = OnEpochEnd(lambda e, l: hist.save(), every_nth_epoch=5)
         stopper = EarlyStopping(monitor='val_bits_loss', patience=35, verbose=0, mode='auto')
         scheduler = AutomaticLearningRateScheduler(
-            model.optimizer, 'loss', epoch_patience=7, min_improvement=0.001,
+            model.optimizer, 'bits_loss', epoch_patience=7, min_improvement=0.001,
             factor=0.25)
         checkpointer = SaveModelAndWeightsCheckpoint(
-            os.path.join(self.output_dir, 'decoder.hdf5'), monitor='val_loss',
+            self.outname('decoder.hdf5'), monitor='val_bits_loss',
             verbose=0, save_best_only=True,
             hdf5_attrs=get_distribution_hdf5_attrs(self.get_label_distributions()))
         nb_batches_per_epoch = 1000
-        plot_history = PlotHistory(hist, os.path.join(self.output_dir, marker + '_loss.png'))
+        plot_history = hist.plot_callback(
+            fname=self.outname(marker + '_loss.png'),
+            metrics=['bits_loss', 'val_bits_loss'])
         # train
         truth_gen = self.truth_generator_factory(h5_truth, label_output_sizes)
         model.fit_generator(
             data_gen(bs),
             samples_per_epoch=bs*nb_batches_per_epoch, nb_epoch=self.nb_epoch,
-            callbacks=[scheduler, checkpointer, hist, CollectValBitsLoss(),
-                       plot_history, stopper],
+            callbacks=[CollectBitsLoss(), scheduler, checkpointer, hist,
+                       plot_history, stopper, hist_saver],
             validation_data=truth_gen(bs),
             nb_val_samples=h5_truth['tags'].shape[0],
             nb_worker=1, max_q_size=4*10, pickle_safe=False

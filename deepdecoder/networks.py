@@ -554,27 +554,27 @@ def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12
                           subsample=(subsample, subsample), init="he_normal", border_mode="same")
         ])
 
-    def f(nb_filter):
+    def f(nb_filter, subsample=1):
         return sequential([
-            _bn_relu_conv(nb_filter),
+            _bn_relu_conv(nb_filter, subsample=subsample),
             _bn_relu_conv(nb_filter),
         ])
-    n = nb_filter
 
     input = Input(shape=data_shape)
-    for d in resnet_depth:
-        x = _bn_relu_conv(n, subsample=2)(input)
-        for _ in range(d):
-            x = merge([x, f(n)(x)], mode='sum')
+    fitlers_by_depth = [nb_filter * 2**i for i in range(len(resnet_depth))]
+    print("fitlers_by_depth", fitlers_by_depth)
+    x = _bn_relu_conv(nb_filter, 3, 3, subsample=2)(input)
+    for i, (n, d) in enumerate(zip(fitlers_by_depth, resnet_depth)):
+        for di in range(d):
+            if di == 0 and i != 0:
+                shortcut = _bn_relu_conv(n, 1, 1, subsample=2)
+                subsample = 2
+            else:
+                shortcut = lambda x: x
+                subsample = 1
+            x = merge([shortcut(x), f(n, subsample)(x)], mode='sum')
 
-    x = sequential([
-        AveragePooling2D(pool_size=(4, 4), strides=(1, 1), border_mode="same"),
-        Flatten(),
-        Dense(256),
-        ELU(),
-        BatchNormalization(mode=0, axis=1),
-        Dropout(0.5),
-    ])(x)
+    x = Flatten()(x)
     ids = sequential([
         Dense(256),
         ELU(),
