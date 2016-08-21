@@ -16,7 +16,7 @@
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
-from deepdecoder.render_gan import RenderGAN, train, train_callbacks, load_tag3d_network, \
+from deepdecoder.render_gan import RenderGAN, SimplifiedRenderGAN, train, train_callbacks, load_tag3d_network, \
     save_real_images
 import diktya.distributions
 from diktya.func_api_helpers import get_hdf5_attr
@@ -62,7 +62,9 @@ def run(output_dir, tag3d_network_weights, real_hdf5_fname, force, nb_epoch,
 
     tag3d_network = load_tag3d_network(tag3d_network_weights)
     labels_shape = tag3d_network.input_layers[0].batch_input_shape
-    gan = RenderGAN(tag3d_network, labels_shape=labels_shape[1:])
+    gan = RenderGAN(tag3d_network, labels_shape=labels_shape[1:],
+                    generator_units=nb_gen_units,
+                    discriminator_units=nb_dis_units)
     callbacks = train_callbacks(
         gan, output_dir, nb_visualise=20**2,
         real_hdf5_fname=real_hdf5_fname,
@@ -83,9 +85,9 @@ def main():
                         help='hdf5 file with the real data')
     parser.add_argument('--nntag3d', type=str,
                         help='weights of neuronal network trained on genenerated 3d tags')
-    parser.add_argument('--gen-units', default=96, type=int,
+    parser.add_argument('--gen-units', default=64, type=int,
                         help='number of units in the generator.')
-    parser.add_argument('--dis-units', default=64, type=int,
+    parser.add_argument('--dis-units', default=48, type=int,
                         help='number of units in the discriminator.')
     parser.add_argument('--epoch', default=301, type=int,
                         help='number of epoch to train.')

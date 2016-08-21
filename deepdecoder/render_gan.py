@@ -15,6 +15,7 @@
 from deepdecoder.networks import get_label_generator, \
     get_lighting_generator, get_preprocess, get_blur_factor, \
     get_offset_back, get_offset_front, get_offset_middle, \
+    simple_gan_generator, \
     render_gan_discriminator, get_details
 from deepdecoder.layers import ThresholdBits, NormSinCosAngle
 from deepdecoder.data import real_generator, DistributionHDF5Dataset, get_distribution_hdf5_attrs
@@ -37,7 +38,7 @@ import seaborn as sns
 from collections import OrderedDict
 
 from deepdecoder.transform import Background, PyramidReduce, \
-    GaussianBlur, AddLighting, Segmentation, HighPass, BlendingBlur
+    GaussianBlur, AddLighting, Segmentation, HighPass, BlendingBlur, ScaleUnitIntervalTo
 
 from diktya.layers.core import Subtensor, InBounds, ZeroGradient
 
@@ -71,7 +72,7 @@ class VisualiseTag3dAndFake(VisualiseGAN):
         tiles = []
         for tag3d, fake in zip(self.preprocess(samples['tag3d']),
                                self.preprocess(samples['fake'])):
-            tiles.append(2*np.clip(tag3d, 0, 1) - 1)
+            tiles.append(tag3d)
             tiles.append(fake)
         return tile(tiles, columns_must_be_multiple_of=2)
 
@@ -107,6 +108,7 @@ def render_gan_custom_objects():
         'Subtensor': Subtensor,
         'HighPass': HighPass,
         'AddLighting': AddLighting,
+        'ScaleUnitIntervalTo': ScaleUnitIntervalTo,
         'Segmentation': Segmentation,
         'GaussianBlur': GaussianBlur,
         'ZeroGradient': ZeroGradient,
@@ -129,7 +131,10 @@ class RenderGAN:
     def __init__(self,
                  tag3d_network,
                  z_dim_offset=50, z_dim_labels=50, z_dim_bits=12,
-                 discriminator_units=32, generator_units=32,
+                 discriminator_units=32,
+                 discriminator_depth=2,
+                 generator_units=32,
+                 generator_depth=2,
                  data_shape=(1, 64, 64),
                  labels_shape=(24,),
                  nb_bits=12,
@@ -142,7 +147,9 @@ class RenderGAN:
         self.z_dim_bits = z_dim_bits
         self.z_dim = z_dim_offset + z_dim_labels + z_dim_bits
         self.discriminator_units = discriminator_units
+        self.discriminator_depth = discriminator_depth
         self.generator_units = generator_units
+        self.generator_depth = generator_depth
         self.preprocess_units = self.generator_units // 2
         self.data_shape = data_shape
         self.labels_shape = labels_shape
@@ -155,7 +162,7 @@ class RenderGAN:
     def _build_discriminator(self):
         x = Input(shape=self.data_shape, name='data')
         d = render_gan_discriminator(x, n=self.discriminator_units,
-                                     conv_repeat=2, dense=[512])
+                                     conv_repeat=self.discriminator_depth, dense=[512])
         self.discriminator = Model([x], [d])
 
     def _build_generator_given_z_offset_and_labels(self):
@@ -164,20 +171,19 @@ class RenderGAN:
 
         outputs = OrderedDict()
         labels_without_bits = Subtensor(self.nb_bits, self.labels_shape[0], axis=1)(labels)
-        tag3d, tag3d_depth_map = self.tag3d_network(labels)
+        raw_tag3d, tag3d_depth_map = self.tag3d_network(labels)
 
+        tag3d = ScaleUnitIntervalTo(-1, 1)(raw_tag3d)
         outputs['tag3d'] = tag3d
-
         outputs['tag3d_depth_map'] = tag3d_depth_map
 
         segmentation = Segmentation(threshold=-0.08, smooth_threshold=0.2,
                                     sigma=1.5, name='segmentation')
 
         tag3d_downsampled = PyramidReduce()(tag3d)
-        tag3d_segmented = segmentation(tag3d)
+        tag3d_segmented = segmentation(raw_tag3d)
         outputs['tag3d_segmented'] = tag3d_segmented
-        tag3d_segmented_blur = GaussianBlur(sigma=3.0)(tag3d_segmented)
-        outputs['tag3d_segmented_blur'] = tag3d_segmented_blur
+        tag3d_segmented_blur = GaussianBlur(sigma=0.66)(tag3d_segmented)
 
         out_offset_front = get_offset_front([z_offset, ZeroGradient()(labels_without_bits)],
                                             self.generator_units)
@@ -186,10 +192,8 @@ class RenderGAN:
                                          nb_conv_layers=2)
         light_outs = get_lighting_generator([out_offset_front, light_depth_map],
                                             self.generator_units)
-
         offset_depth_map = get_preprocess(tag3d_depth_map, self.preprocess_units,
                                           nb_conv_layers=2)
-
         offset_middle_light = get_preprocess(concat(light_outs), self.preprocess_units,
                                              resize=['down', 'down'])
         out_offset_middle = get_offset_middle(
@@ -202,21 +206,28 @@ class RenderGAN:
         offset_back_feature_map, out_offset_back = get_offset_back(
             [out_offset_middle, offset_back_tag3d_downsampled], self.generator_units)
 
-        tag3d_lighten = AddLighting(
-            scale_factor=0.75, shift_factor=0.75)([tag3d] + light_outs)
+        blur_factor = get_blur_factor(out_offset_middle, min=0.25, max=1.)
+        outputs['blur_factor'] = blur_factor
 
-        blur_factor = get_blur_factor(out_offset_middle, min=0.05, max=1.0)
-        outputs['tag3d_lighten'] = tag3d_lighten
-        tag3d_blur = BlendingBlur(sigma=1)([tag3d_lighten, blur_factor])
+        tag3d_blur = BlendingBlur(sigma=3.0)([tag3d, blur_factor])
         outputs['tag3d_blur'] = tag3d_blur
-        blending = Background(name='blending')([out_offset_back, tag3d_blur, tag3d_segmented_blur])
+        outputs['light_black'] = light_outs[0]
+        outputs['light_white'] = light_outs[1]
+        outputs['light_shift'] = light_outs[2]
+        tag3d_lighten = AddLighting(
+            scale_factor=0.90, shift_factor=0.90)([tag3d_blur] + light_outs)
+        tag3d_lighten = InBounds(clip=True, weight=15)(tag3d_lighten)
+        outputs['tag3d_lighten'] = tag3d_lighten
 
+        outputs['background_offset'] = out_offset_back
+        blending = Background(name='blending')([out_offset_back, tag3d_lighten,
+                                                tag3d_segmented_blur])
         outputs['fake_without_noise'] = blending
         details = get_details(
             [blending, tag3d_segmented_blur, tag3d, out_offset_back,
              offset_back_feature_map] + light_outs, self.generator_units)
         outputs['details_offset'] = details
-        details_high_pass = HighPass(4, nb_steps=4)(details)
+        details_high_pass = HighPass(3.5, nb_steps=7)(details)
         outputs['details_high_pass'] = details_high_pass
         fake = InBounds(-1.0, 1.0)(
             merge([details_high_pass, blending], mode='sum'))
@@ -289,6 +300,46 @@ class RenderGAN:
         save("generator_given_z_and_labels")
         save("generator_given_z")
         save("discriminator")
+
+
+class SimplifiedRenderGAN(RenderGAN):
+    def _build_generator_given_z_offset_and_labels(self):
+        labels = Input(shape=self.labels_shape, name='input_labels')
+        z_offset = Input(shape=(self.z_dim_offset,), name='input_z_offset')
+
+        outputs = OrderedDict()
+        labels_without_bits = Subtensor(self.nb_bits, self.labels_shape[0], axis=1)(labels)
+
+        # build tag3d tensors
+        tag3d, tag3d_depth_map = self.tag3d_network(labels)
+        tag3d_segmented = Segmentation(threshold=-0.08, smooth_threshold=0.2,
+                                       sigma=1.5, name='segmentation')(tag3d)
+        tag3d_segmented_blur = GaussianBlur(sigma=3.0)(tag3d_segmented)
+        # get generator params
+
+        blur_factor, lights, background, details = \
+            simple_gan_generator(self.generator_units, z_offset, labels_without_bits,
+                                 tag3d_depth_map, tag3d, depth=self.generator_depth)
+        tag3d_blur = BlendingBlur(sigma=1)([tag3d, blur_factor])
+        tag3d_lightin = AddLighting(scale_factor=0.85, shift_factor=0.75)([tag3d_blur] + lights)
+        fake_without_noise = Background(name='bg')(
+            [background, tag3d_lightin, tag3d_segmented_blur])
+        details_high_pass = HighPass(4, nb_steps=4)(details)
+        fake = InBounds(-1.0, 1.0)(merge([details_high_pass, fake_without_noise], mode='sum'))
+
+        outputs = [
+            ('tag3d', tag3d),
+            ('tag3d_blur',  tag3d_blur),
+            ('tag3d_lightin', tag3d_lightin),
+            ('fake_without_noise', fake_without_noise),
+            ('fake', fake),
+        ]
+        outputs = OrderedDict([(name, name_tensor(x, name)) for name, x in outputs])
+
+        self.generator_given_z_and_labels = Model([z_offset, labels], [fake])
+        self.sample_generator_given_z_and_labels_output_names = list(outputs.keys())
+        self.sample_generator_given_z_and_labels = Model([z_offset, labels],
+                                                         list(outputs.values()))
 
 
 class StoreSamples(Callback):

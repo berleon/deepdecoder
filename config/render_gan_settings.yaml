@@ -1,7 +1,7 @@
 # number of filters in the last conv layers
 # every conv layer before has double the number of filters
-dis-units: 64
-gen-units: 104
+dis-units: 32
+gen-units: 32
 
 # train this number of epochs
 epoch: 301

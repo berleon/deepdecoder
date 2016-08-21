@@ -106,7 +106,7 @@ def get_confidence(bits_true, bits_pred_probs):
     confidence_results = []
     confidence = np.min(np.abs(0.5 - bits_pred_probs), axis=1) * 2
     bits_pred = np.round(bits_pred_probs).astype(np.int32)
-    for confidence_threshold in np.arange(0, 1, 0.01):
+    for confidence_threshold in np.arange(0, 1, 0.002):
         eval_bits_pred = bits_pred[confidence >= confidence_threshold]
         eval_bits_true = bits_true[confidence >= confidence_threshold]
         results = OrderedDict([

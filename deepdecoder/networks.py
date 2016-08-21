@@ -29,7 +29,7 @@ from keras.regularizers import Regularizer
 import keras.backend as K
 
 from diktya.func_api_helpers import sequential, concat
-from diktya.blocks import resnet
+from diktya.blocks import resnet, conv2d_block
 from diktya.layers.core import Subtensor, InBounds
 from beesgrid import NUM_MIDDLE_CELLS, NUM_CONFIGS
 from deepdecoder.deconv import Deconvolution2D
@@ -231,7 +231,7 @@ def get_label_generator(x, nb_units, nb_output_units):
         Activation('relu'),
         Dense(nb_output_units),
         batch_norm(gamma_init=constant_init(0.25)),
-        InBounds(-1, 1, clip=True),
+        InBounds(-1, 1),
     ], ns='driver')
     return driver(x)
 
@@ -272,12 +272,12 @@ def get_offset_back(inputs, nb_units):
         UpSampling2D(),  # 64x64
         conv(n, 3, 3),
         conv(n, 3, 3),
-        InBounds(-1, 1, clip=True),
+        InBounds(-1, 1),
     ], ns='offset.back')(input)
 
     return back_feature_map, sequential([
         Convolution2D(1, 3, 3, border_mode='same'),
-        InBounds(-1, 1, clip=True),
+        InBounds(-1, 1),
     ], ns='offset.back_out')(back_feature_map)
 
 
@@ -287,7 +287,7 @@ def get_blur_factor(inputs, min=0, max=2):
         Convolution2D(1, 3, 3),
         Flatten(),
         Dense(1),
-        InBounds(min, max, clip=True),
+        InBounds(min, max),
     ], ns='mask_weight_blending')(input)
 
 
@@ -305,17 +305,17 @@ def get_lighting_generator(inputs, nb_units):
         conv(n, 3, 3),
         Convolution2D(3, 1, 1, border_mode='same'),
         UpSampling2D(),  # 64x64
-        InBounds(-1, 1, clip=True),
         GaussianBlur(sigma=3.5),
     ], ns='lighting')(input)
 
     shift = Subtensor(0, 1, axis=1)(light_conv)
+    shift = InBounds(-1, 1)(shift)
+    in_bounds = InBounds(0, 2)
 
-    in_bounds = InBounds(0, 1, clip=True)
     scale_black = in_bounds(Subtensor(1, 2, axis=1)(light_conv))
     scale_white = in_bounds(Subtensor(2, 3, axis=1)(light_conv))
 
-    return [shift, scale_black, scale_white]
+    return [scale_black, scale_white, shift]
 
 
 def get_details(inputs, nb_units):
@@ -325,7 +325,7 @@ def get_details(inputs, nb_units):
         conv(n, 3, 3),
         conv(n, 3, 3),
         Convolution2D(1, 3, 3, border_mode='same', init='normal'),
-        InBounds(-0.75, 0.75, clip=True)
+        InBounds(-0.75, 0.75)
     ], ns='details')(concat(inputs))
 
 
@@ -610,3 +610,75 @@ def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12
     model.compile(optimizer, loss=list(losses.values()),
                   loss_weights={k: get_loss_weight(k) for k in losses.keys()})
     return model
+
+
+def simple_gan_generator(nb_units, z, labels, depth_map,
+                         tag3d, depth=2):
+    n = nb_units
+    depth_map_features = sequential([
+        conv2d_block(n),
+        conv2d_block(2*n),
+    ])(depth_map)
+
+    tag3d_features = sequential([
+        conv2d_block(n, subsample=2),
+        conv2d_block(2*n, subsample=2),
+    ])(tag3d)
+
+    x = sequential([
+        Dense(5*n),
+        BatchNormalization(mode=2),
+        Activation('relu'),
+        Dense(5*n),
+        BatchNormalization(mode=2),
+        Activation('relu'),
+    ])(concat([z, labels]))
+
+    blur = InBounds(0, 1, clip=True)(Dense(1)(x))
+
+    x = sequential([
+        Dense(8*4*4*n),
+        Activation('relu'),
+        BatchNormalization(mode=2),
+        Reshape((8*n, 4, 4)),
+    ])(x)
+
+    x = sequential([
+        conv2d_block(8*n, filters=1, depth=1, up=True),  # 4x4 -> 8x8
+        conv2d_block(8*n, depth=depth, up=True),  # 8x8 -> 16x16
+    ])(x)
+
+    off_depth_map = sequential([
+        conv2d_block(2*n, depth=depth),
+    ])(concat([x, depth_map_features]))
+
+    light = sequential([
+        conv2d_block(2*n, depth=depth, up=True),  # 16x16 -> 32x32
+        conv2d_block(n, depth=depth, up=True),  # 32x32 -> 64x64
+    ])(off_depth_map)
+
+    def get_light(x):
+        return sequential([
+            conv2d_block(1, filters=1, batchnorm=False),
+            GaussianBlur(sigma=4),
+            InBounds(0, 1, clip=True),
+        ])(x)
+
+    light_sb = get_light(light)
+    light_sw = get_light(light)
+    light_t = get_light(light)
+
+    background = sequential([
+        conv2d_block(2*n, depth=depth, up=True),  # 16x16 -> 32x32
+        conv2d_block(n, depth=depth, up=True),  # 32x32 ->  64x64
+        conv2d_block(1, batchnorm=False),
+        InBounds(-1, 1, clip=True),
+    ])(off_depth_map)
+
+    details = sequential([
+        conv2d_block(2*n, depth=depth, up=True),  # 16x16 -> 32x32
+        conv2d_block(n, depth=depth, up=True),  # 32x32 ->  64x64
+        conv2d_block(1, depth=1, batchnorm=False),
+        InBounds(-1, 1, clip=True)
+    ])(concat(tag3d_features, off_depth_map))
+    return blur, [light_sb, light_sw, light_t], background, details

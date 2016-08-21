@@ -134,7 +134,7 @@ class BlendingBlur(Layer):
         image, factor = x
         down = gaussian_filter_2d(image, self.sigma, self.window_radius)
         high_freq = image - down
-        return down + high_freq * factor.dimshuffle(0, 1, 'x', 'x')
+        return down + high_freq * (1 - factor.dimshuffle(0, 1, 'x', 'x'))
 
     def get_config(self):
         config = {
@@ -193,6 +193,24 @@ class Segmentation(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class ScaleUnitIntervalTo(Layer):
+    def __init__(self, start, end, **kwargs):
+        self.start = start
+        self.end = end
+        super().__init__(**kwargs)
+
+    def call(self, inputs, mask=None):
+        return inputs * (self.end - self.start) + self.start
+
+    def get_config(self):
+        config = {
+            'start': float(self.start),
+            'end': float(self.end),
+        }
+        base_config = super(ScaleUnitIntervalTo, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 class AddLighting(Layer):
     def __init__(self, scale_factor=1,
                  shift_factor=1, **kwargs):
@@ -210,10 +228,7 @@ class AddLighting(Layer):
         return x_shape
 
     def call(self, inputs, mask=None):
-        def norm_scale(a):
-            return (a + 1) / 2
         x, scale_black, scale_white, shift = inputs
-        x = 2*(x - 0.5)
         black_selection = K.cast(x < 0, K.floatx())
         white_selection = 1 - black_selection
 
