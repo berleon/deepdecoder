@@ -25,6 +25,9 @@ import pickle
 from collections import OrderedDict
 import time
 from progressbar import ProgressBar
+from pipeline.stages.processing import Decoder
+from deepdecoder.data import DistributionHDF5Dataset
+
 
 def mse(x, y):
     return ((x - y)**2).mean(axis=-1)
@@ -45,46 +48,46 @@ def mean_hamming_distance(y_true, y_pred):
     return (np.sum(hd) - nb_intermediate) / len(hd)
 
 
-def get_model_params(model_fname):
-    decoder = load_model(model_fname)
-    return decoder.count_params()
-
-
 def get_predictions(tp: DecoderTraining, no_cache: bool):
     def _calculate_predictions():
         print("Loading GT data: {}".format(tp.gt_fname))
         h5_truth = h5py.File(tp.gt_fname)
-        decoder = load_model(tp.model_fname())
+        decoder = Decoder(tp.model_fname())
         print("Loaded decoder. Got model with {:.2f} million parameters."
-              .format(decoder.count_params() / 1e6))
-        dist = load_from_json(get_hdf5_attr(tp.model_fname(), 'distribution').decode('utf-8'))
+              .format(decoder.model.count_params() / 1e6))
+        dist = decoder.distribution
+        assert decoder.distribution == tp.get_label_distributions()
         fill_zeros = [(n, s) for (n, s) in dist.norm_nb_elems.items()
                       if n != 'bits']
+
         batch_size = 32
         gen = tp.truth_generator_factory(h5_truth, fill_zeros)(batch_size)
-        decoder._make_predict_function()
-        predict = predict_wrapper(decoder.predict, decoder.output_names)
         bits_true = []
         bits_pred = []
         nb_bits = 12
         total_time = 0
         nb_samples = 0
         total_samples = len(h5_truth['tags'])
+
+        h5_fname = tp.outname("gt_predictions.hdf5")
+        if os.path.exists(h5_fname):
+            os.remove(h5_fname)
+        dset = DistributionHDF5Dataset(
+            h5_fname, decoder.distribution, nb_samples=total_samples)
         with ProgressBar(max_value=total_samples) as pbar:
-            while True:
-                tags, gt = next(gen)
+            for tags, gt in gen:
                 if nb_samples + len(tags) > total_samples:
                     break
                 nb_samples += len(tags)
                 bits_true.append(np.array(gt[:nb_bits]).T)
 
                 start = time.time()
-                outputs = predict(tags, batch_size)
+                outputs = decoder.predict(tags)
+                dset.append(outputs, tag=tags)
                 total_time += time.time() - start
-                bits = np.array([v.flatten() for n, v in outputs.items()
-                                 if n.startswith("bit")])
-                bits_pred.append(bits.T)
+                bits_pred.append(outputs['bits'] / 2. + 0.5)
                 pbar.update(nb_samples)
+
         time_per_sample = total_time / nb_samples
         return np.concatenate(bits_true), np.concatenate(bits_pred), time_per_sample
 
