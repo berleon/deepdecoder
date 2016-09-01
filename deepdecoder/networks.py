@@ -17,16 +17,17 @@ import numpy as np
 from keras.models import Sequential
 import keras.initializations
 from keras.layers.core import Dense, Flatten, Reshape, Activation, \
-    Layer, Dropout
+    Layer, Dropout, Lambda
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, \
     UpSampling2D, AveragePooling2D
 from keras.layers.advanced_activations import LeakyReLU, ELU
 from keras.layers.normalization import BatchNormalization
 from keras.engine.topology import merge, Input
 from keras.engine.training import Model
-from keras.optimizers import Adam
-from keras.regularizers import Regularizer
+from keras.regularizers import Regularizer, l2
 import keras.backend as K
+from theano.ifelse import ifelse
+from theano.tensor.shared_randomstreams import RandomStreams
 
 from diktya.func_api_helpers import sequential, concat
 from diktya.blocks import resnet, conv2d_block
@@ -543,6 +544,43 @@ def render_gan_discriminator_resnet(x, n=32, conv_repeat=1, dense=[], out_activa
     ], ns='dis')(concat(x, axis=0, name='concat_fake_real'))
 
 
+def decoder_end_block(x, label_sizes, nb_bits, activation, weight_decay=0.):
+    x = Flatten()(x)
+    ids = sequential([
+        Dense(256, W_regularizer=l2(weight_decay)),
+        activation(),
+        BatchNormalization(mode=0, axis=1),
+        Dropout(0.5),
+    ])(x)
+
+    outputs = OrderedDict()
+    losses = OrderedDict()
+    for i in range(nb_bits):
+        name = 'bit_{}'.format(i)
+        outputs[name] = Dense(1, activation='sigmoid', name=name)(ids)
+        losses[name] = 'binary_crossentropy'
+
+    params = sequential([
+        Dense(256, W_regularizer=l2(weight_decay)),
+        activation(),
+        BatchNormalization(mode=0, axis=1),
+        Dropout(0.5),
+    ])(x)
+
+    for name, output_size in label_sizes:
+        outputs[name] = Dense(output_size, activation='tanh', name=name)(params)
+        losses[name] = 'mse'
+
+    return outputs, losses
+
+
+def decoder_loss_weights(name):
+    if name.startswith('bit'):
+        return 1.
+    else:
+        return 0.1
+
+
 def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
                    resnet_depth=(3, 4, 6, 3),
                    optimizer='adam'):
@@ -574,41 +612,183 @@ def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12
                 subsample = 1
             x = merge([shortcut(x), f(n, subsample)(x)], mode='sum')
 
-    x = Flatten()(x)
-    ids = sequential([
-        Dense(256),
-        ELU(),
-        BatchNormalization(mode=0, axis=1),
-        Dropout(0.5),
-    ])(x)
-
-    outputs = OrderedDict()
-    losses = OrderedDict()
-    for i in range(nb_bits):
-        name = 'bit_{}'.format(i)
-        outputs[name] = Dense(1, activation='sigmoid', name=name)(ids)
-        losses[name] = 'binary_crossentropy'
-
-    params = sequential([
-        Dense(256),
-        ELU(),
-        BatchNormalization(mode=0, axis=1),
-        Dropout(0.5),
-    ])(x)
-
-    for name, output_size in label_sizes:
-        outputs[name] = Dense(output_size, activation='tanh', name=name)(params)
-        losses[name] = 'mse'
-
-    def get_loss_weight(name):
-        if name.startswith('bit'):
-            return 1.
-        else:
-            return 0.1
+    outputs, losses = decoder_end_block(x, label_sizes, nb_bits,
+                                        activation=lambda: ELU())
 
     model = Model(input, list(outputs.values()))
     model.compile(optimizer, loss=list(losses.values()),
-                  loss_weights={k: get_loss_weight(k) for k in losses.keys()})
+                  loss_weights={k: decoder_loss_weights(k) for k in losses.keys()})
+    return model
+
+
+def decoder_stochastic_wrn(label_sizes,
+                           nb_bits=12,
+                           data_shape=(1, 64, 64),
+                           activation=lambda: Activation('relu'),
+                           normalization=lambda: BatchNormalization(axis=1, mode=0),
+                           weight_init='he_normal',
+                           weight_decay=0.0001,
+                           dropout_probability=0.,
+                           wrn_depth=58,
+                           wrn_k=2,
+                           death_rate=0.5,
+                           optimizer='adam'):
+    class TestScale(Layer):
+        def __init__(self, death_rate, **kwargs):
+            self.death_rate = death_rate
+            self.uses_learning_phase = True
+            super(TestScale, self).__init__(**kwargs)
+
+        def call(self, x, mask=None):
+            return K.in_test_phase((K.ones_like(x) - self.death_rate) * x, x)
+
+    def norm_act_block():
+        def f(inputs):
+            x = normalization()(inputs)
+            x = activation()(x)
+            return x
+        return f
+
+    def conv2(nb_filter, nb_row, nb_col, subsample=(1, 1), bias=True):
+        return Convolution2D(nb_filter, nb_row, nb_col,
+                             init=weight_init,
+                             border_mode='same',
+                             subsample=subsample,
+                             bias=bias,
+                             W_regularizer=l2(weight_decay))
+
+    def dropout(p=None):
+        if p is None:
+            p = dropout_probability
+
+        def f(inputs):
+            if p > 0.:
+                inputs = Dropout(p)(inputs)
+            return inputs
+        return f
+
+    def equal_gate_shape(input_shapes):
+        assert(input_shapes[0] == input_shapes[1])
+        return input_shapes[1]
+
+    def residual_block(nb_filter, stochastic=False, stochastic_layers=None):
+        def f(inputs):
+            x = norm_act_block()(inputs)
+            x = conv2(nb_filter, 3, 3)(x)
+            x = dropout()(x)
+            x = norm_act_block()(x)
+            x = conv2(nb_filter, 3, 3)(x)
+
+            if inputs._keras_shape != x._keras_shape:
+                inputs = conv2(nb_filter, 1, 1, bias=False)(inputs)
+
+            if not stochastic:
+                return merge((inputs, x), mode='sum')
+
+            _death_rate = K.variable(death_rate)
+            stochastic_layers.append(_death_rate)
+
+            x = TestScale(_death_rate)(x)
+
+            out = merge([inputs, x], mode="sum", output_shape=x._keras_shape[1:])
+
+            rnd_gate = rng.binomial((1, ), p=(1. - _death_rate), dtype="int8")
+            gate = ifelse(K.learning_phase(), rnd_gate[0], 1)
+
+            m = Lambda(lambda tensors: ifelse(gate, tensors[0], tensors[1]),
+                       output_shape=equal_gate_shape)([out, inputs])
+            return m
+        return f
+
+    def residual_reduction_block(nb_filter):
+        def f(inputs):
+            x = norm_act_block()(inputs)
+            x = conv2(nb_filter, 3, 3, subsample=(2, 2))(x)
+            x = dropout()(x)
+            x = norm_act_block()(x)
+            x = conv2(nb_filter, 3, 3)(x)
+
+            inputs_bottleneck = conv2(nb_filter, 1, 1, subsample=(2, 2),
+                                      bias=False)(inputs)
+
+            s = merge((inputs_bottleneck, x), mode='sum')
+            return s
+        return f
+
+    def skip_connection(inputs, residual, stochastic=False,
+                        stochastic_layers=None):
+        inputs_filters = inputs._keras_shape[1]
+        residual_filters = residual._keras_shape[1]
+        subsample = np.array(inputs._keras_shape[2:]) // np.array(residual._keras_shape[2:])
+
+        inputs = dropout()(inputs)
+        if (inputs_filters != residual_filters) or np.any(subsample > 1):
+            skip = conv2(residual_filters, 1, 1, subsample=subsample, bias=False)(inputs)
+        else:
+            skip = inputs
+
+        if not stochastic:
+            return merge((skip, residual), mode='sum')
+        else:
+            _death_rate = K.variable(death_rate)
+            stochastic_layers.append(_death_rate)
+
+            skip = TestScale(_death_rate)(skip)
+
+            out = merge([skip, residual], mode="sum")
+
+            rnd_gate = rng.binomial((1, ), p=(1. - _death_rate), dtype="int8")
+            gate = ifelse(K.learning_phase(), rnd_gate[0], 1)
+
+            m = Lambda(lambda tensors: K.switch(gate, tensors[0], tensors[1]),
+                       output_shape=equal_gate_shape)([out, residual])
+            return m
+
+    n = (wrn_depth - 4) // 6
+    stochastic_layers = []
+    rng = RandomStreams()
+
+    input = Input(shape=data_shape)
+
+    m_stem = conv2(16, 3, 3, subsample=(2, 2))(input)
+    m_stem = norm_act_block()(m_stem)
+
+    m_b1 = residual_block(nb_filter=16 * wrn_k,
+                          stochastic_layers=stochastic_layers)(m_stem)
+    for _ in range(n - 1):
+        m_b1 = residual_block(nb_filter=16 * wrn_k, stochastic=True,
+                              stochastic_layers=stochastic_layers)(m_b1)
+    m_b1 = skip_connection(input, m_b1, stochastic=True,
+                           stochastic_layers=stochastic_layers)
+
+    m_b2 = residual_reduction_block(nb_filter=32 * wrn_k)(m_b1)
+    for _ in range(n - 1):
+        m_b2 = residual_block(nb_filter=32 * wrn_k, stochastic=True,
+                              stochastic_layers=stochastic_layers)(m_b2)
+    m_b2 = skip_connection(m_b1, m_b2, stochastic=True,
+                           stochastic_layers=stochastic_layers)
+
+    m_b3 = residual_reduction_block(nb_filter=64 * wrn_k)(m_b2)
+    for _ in range(n - 1):
+        m_b3 = residual_block(nb_filter=64 * wrn_k, stochastic=True,
+                              stochastic_layers=stochastic_layers)(m_b3)
+    m_b3 = skip_connection(m_b2, m_b3, stochastic=True,
+                           stochastic_layers=stochastic_layers)
+    m_b3 = skip_connection(input, m_b3, stochastic=True,
+                           stochastic_layers=stochastic_layers)
+
+    x = norm_act_block()(m_b3)
+    x = AveragePooling2D(pool_size=(8, 8))(x)
+    x = dropout()(x)
+
+    for i, tb in enumerate(stochastic_layers, start=0):
+        K.set_value(tb, i / len(stochastic_layers) * death_rate)
+
+    outputs, losses = decoder_end_block(x, label_sizes, nb_bits, activation, weight_decay)
+
+    model = Model(input, list(outputs.values()))
+    model.compile(optimizer, loss=list(losses.values()),
+                  loss_weights={k: decoder_loss_weights(k) for k in losses.keys()})
     return model
 
 

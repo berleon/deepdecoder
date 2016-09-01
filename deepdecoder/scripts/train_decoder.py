@@ -17,17 +17,18 @@ import matplotlib
 matplotlib.use('Agg')  # noqa
 
 import matplotlib.pyplot as plt
-from deepdecoder.networks import decoder_resnet
+from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn
 from deepdecoder.data import DistributionHDF5Dataset, get_distribution_hdf5_attrs
 import argparse
 import os
 import numpy as np
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, Callback
-from keras.optimizers import Nadam, SGD
+from keras.optimizers import SGD
 from diktya.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
     SaveModelAndWeightsCheckpoint, OnEpochEnd
 from diktya.numpy import scipy_gaussian_filter_2d, image_save, tile
+from enum import Enum
 import h5py
 from skimage.exposure import equalize_hist
 import time
@@ -222,10 +223,15 @@ def save_samples(data, bits, outfname):
     image_save(outfname, np.clip(tile(data), -1, 1))
 
 
+class DecoderModel(Enum):
+    resnet = 1,
+    stochastic_wrn = 2
+
+
 class DecoderTraining:
     def __init__(self, dataset_fnames, gt_fname, force, nb_epoch, nb_units,
                  use_augmentation, use_noise, use_hist_equalization,
-                 data_name, output_dir):
+                 data_name, output_dir, decoder_model=DecoderModel.resnet):
         self.dataset_fnames = dataset_fnames
         self.gt_fname = gt_fname
         self.force = force
@@ -236,20 +242,34 @@ class DecoderTraining:
         self.data_name = data_name
         self.output_dir = output_dir
         self.use_hist_equalization = use_hist_equalization
+        assert(type(decoder_model) == DecoderModel)
+        self.decoder_model = decoder_model
         self._label_distribution = None
+
+    def get_model(self, label_output_sizes):
+        optimizer = SGD(momentum=0.9, nesterov=True)
+
+        if self.decoder_model == DecoderModel.resnet:
+            return decoder_resnet(label_output_sizes,
+                                  nb_filter=self.nb_units,
+                                  resnet_depth=[3, 6, 4, 3],
+                                  optimizer=optimizer)
+        elif self.decoder_model == DecoderModel.stochastic_wrn:
+            return decoder_stochastic_wrn(label_output_sizes,
+                                          optimizer=optimizer)
 
     def to_config(self):
         return {
-            'dataset_fnames':  self.dataset_fnames,
-            'gt_fname':  self.gt_fname,
-            'force':  self.force,
-            'nb_epoch':  self.nb_epoch,
-            'nb_units':  self.nb_units,
-            'use_augmentation':  self.use_augmentation,
-            'use_noise':  self.use_noise,
-            'use_hist_equalization':  self.use_hist_equalization,
-            'data_name':  self.data_name,
-            'output_dir':  self.output_dir,
+            'dataset_fnames': self.dataset_fnames,
+            'gt_fname': self.gt_fname,
+            'force': self.force,
+            'nb_epoch': self.nb_epoch,
+            'nb_units': self.nb_units,
+            'use_augmentation': self.use_augmentation,
+            'use_noise': self.use_noise,
+            'use_hist_equalization': self.use_hist_equalization,
+            'data_name': self.data_name,
+            'output_dir': self.output_dir,
         }
 
     def model_fname(self):
@@ -356,17 +376,15 @@ class DecoderTraining:
         nb_bits = 12
         vis_bits = np.array(vis_out[1][:nb_bits]).T
         save_samples(vis_out[0][:, 0], vis_bits,
-                     self.outname( marker + "_train_samples.png"))
+                     self.outname(marker + "_train_samples.png"))
         gt_data, gt_bits = next(truth_gen_only_bits(nb_vis_samples))
         gt_bits = np.array(gt_bits).T
         save_samples(gt_data[:, 0], gt_bits,
                      self.outname(marker + "_test_samples.png"))
         # build model
-        bs = 128
+        bs = 64
         label_output_sizes = self.get_label_output_sizes()
-        model = decoder_resnet(label_output_sizes, nb_filter=self.nb_units,
-                               resnet_depth=[3, 6, 4, 3],
-                               optimizer=SGD(momentum=0.9, nesterov=True))
+        model = self.get_model(label_output_sizes)
         # setup training
         hist = HistoryPerBatch(self.output_dir, extra_metrics=['bits_loss', 'val_bits_loss'])
         hist_saver = OnEpochEnd(lambda e, l: hist.save(), every_nth_epoch=5)
@@ -429,6 +447,8 @@ def main():
                         help='number of units in the decoder.')
     parser.add_argument('--epoch', default=1000, type=int,
                         help='number of epoch to train.')
+    parser.add_argument('--model', default='resnet', type=str,
+                        help='decoder model type. either resnet or wrn')
     parser.add_argument('--dataset-name', default='fake', type=str,
                         help='get the images from this dataset.')
     parser.add_argument('-a', '--augmentation', action='store_true',
@@ -449,9 +469,16 @@ def main():
         args.output_dir, args.units, args.augmentation,
         args.noise, args.hist_eq, args.dataset_name, args.marker)
 
+    models = {
+        'resnet': DecoderModel.resnet,
+        'wrn': DecoderModel.stochastic_wrn
+    }
+    assert(args.model in models.keys())
+
     dt = DecoderTraining(args.train_set, args.gt, args.force, args.epoch, args.units,
                          args.augmentation, args.noise, args.hist_eq,
-                         args.dataset_name, output_dir)
+                         args.dataset_name, output_dir,
+                         decoder_model=models[args.model])
     dt.run()
 
 if __name__ == "__main__":
