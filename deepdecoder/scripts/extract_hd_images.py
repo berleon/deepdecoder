@@ -31,8 +31,7 @@ def save_first_frame(video_fname, output_dir, force):
     outname = os.path.join(output_dir, get_fname(camIdx, start) + ".png")
     if os.path.exists(outname) and not force:
         return
-
-    gen = raw_frames_generator(video_fname)
+    gen = raw_frames_generator(video_fname, format='guess_on_ext')
     frame = next(gen)
     assert frame.dtype == np.uint8
     image_save(outname, frame)

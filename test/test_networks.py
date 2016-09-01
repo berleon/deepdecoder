@@ -19,20 +19,17 @@ from keras.layers.convolutional import Convolution2D, UpSampling2D, \
     MaxPooling2D
 from keras.engine.topology import Input, Container
 from keras.optimizers import Adam
-from diktya.gan import GAN, gan_binary_crossentropy, gan_outputs
+from diktya.gan import GAN
 import pytest
-from beesgrid import get_gt_files_in_dir, gt_grids, NUM_MIDDLE_CELLS, \
-    CONFIG_CENTER, NUM_CONFIGS
+from beesgrid import NUM_MIDDLE_CELLS, CONFIG_CENTER, NUM_CONFIGS
 
-from diktya.func_api_helpers import sequential, concat
-from deepdecoder.networks import render_gan_generator, get_label_generator, \
-    get_lighting_generator, get_offset_merge_mask, get_blur_factor, \
+from diktya.func_api_helpers import sequential, concat, get_layer
+from deepdecoder.networks import get_label_generator, \
+    get_lighting_generator, get_blur_factor, \
     get_offset_back, get_offset_front, get_offset_middle, tag3d_network_dense, \
     render_gan_discriminator, get_details, get_decoder_model, \
-    NormSinCosAngle
-
-from deepdecoder.evaluate import GTEvaluator
-from deepdecoder.blending_gan import lecture
+    simple_gan_generator
+import keras.backend as K
 
 
 def test_decoder_model():
@@ -348,3 +345,22 @@ def test_render_gan_generator():
     gan.generate({'z': z_in})
     fn = gan.compile_custom_layers(['fake', 'mask', 'mask_with_lighting'])
     fn({'z': z_in, 'real': real_in})
+
+
+def test_simple_gan_generator():
+    nb_units = 2
+    bs = 8
+    z = Input(batch_shape=(bs, 50))
+    labels = Input(batch_shape=(bs, 22))
+    depth_map = Input(batch_shape=(bs, 1, 16, 16))
+    tag3d = Input(batch_shape=(bs, 1, 64, 64))
+    blur, (light_sb, light_sw, light_t), background, details = \
+        simple_gan_generator(nb_units, z, labels, depth_map, tag3d, depth=2)
+
+    inputs = [z, labels, depth_map, tag3d]
+    fn = K.function([K.learning_phase(), z, labels, depth_map, tag3d],
+                    [blur, light_sb, light_sw, light_t, background, details])
+    out = fn([1] + [np.random.sample(get_layer(x).output_shape) for x in inputs])
+    assert out[0].shape == (bs, 1)
+    for i, out_arr in enumerate(out[1:]):
+        assert out_arr.shape == (bs, 1, 64, 64), i + 1

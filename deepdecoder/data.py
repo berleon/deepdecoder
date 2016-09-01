@@ -112,24 +112,34 @@ def generated_3d_tags(tag_distribution, batch_size=128, artist=None, scale=1.):
 
 
 class HDF5Dataset(h5py.File):
-    def __init__(self, name, nb_samples=None, **kwargs):
+    def __init__(self, name, nb_samples=None, chunks=None, **kwargs):
         super().__init__(name, **kwargs)
         self.dataset_created = '__dataset_created' in self.attrs
         if nb_samples is None:
-            if '__nb_samples' not in self.attrs:
-                raise Exception("Argument nb_samples not given and not found in hdf5 file.")
-            self.nb_samples = self.attrs['__nb_samples']
+            if '__nb_samples' in self.attrs:
+                self.nb_samples = self.attrs['__nb_samples']
+            else:
+                self.nb_samples = None
         else:
             self.nb_samples = nb_samples
             self.attrs['__nb_samples'] = nb_samples
-        self.create_dataset_kwargs = {
-            'compression': 'gzip'
-        }
+
+        if nb_samples is None and chunks is None:
+            chunks = 256
+        self.chunks = chunks
         self._append_pos = None
 
     @staticmethod
     def _nearest_power_of_two(x):
         return int(2**np.round(np.log(x) / np.log(2)))
+
+    def dataset_names(self):
+        if not self.dataset_created:
+            raise Exception("No Datasets  created.")
+        if not hasattr(self, '_dataset_names'):
+            self._dataset_names = [n.decode('utf-8')
+                                   for n in self.attrs['dataset_names']]
+        return self._dataset_names
 
     def _create_dataset(self, **kwargs):
         if self.dataset_created:
@@ -138,11 +148,23 @@ class HDF5Dataset(h5py.File):
         self.attrs['dataset_names'] = [k.encode('utf-8') for k in kwargs.keys()]
         for name, array in kwargs.items():
             shape = array.shape[1:]
-            self.create_dataset(name,
-                                shape=(self.nb_samples,) + shape,
-                                dtype=str(array.dtype))
+            if self.nb_samples:
+                self.create_dataset(name,
+                                    shape=(self.nb_samples,) + shape,
+                                    dtype=str(array.dtype))
+            else:
+                self.create_dataset(name,
+                                    shape=(1,) + shape,
+                                    chunks=(self.chunks,) + shape,
+                                    maxshape=(None,) + shape,
+                                    dtype=str(array.dtype))
+
         self.dataset_created = True
         self._append_pos = 0
+
+    def _ensure_enough_space_for(self, size):
+        for name in self.dataset_names():
+            self[name].resize(size, axis=0)
 
     def append(self, **kwargs):
         """
@@ -155,14 +177,19 @@ class HDF5Dataset(h5py.File):
 
         if not self.dataset_created:
             self._create_dataset(**kwargs)
-        if self._append_pos >= self.nb_samples:
+        if self.nb_samples and self._append_pos >= self.nb_samples:
             raise Exception("Dataset is allready full!")
 
         batch_size = len(next(iter(kwargs.values())))
         begin = self._append_pos
-        end = min(begin+batch_size, self.nb_samples)
+        if self.nb_samples:
+            end = min(begin+batch_size, self.nb_samples)
+        else:
+            end = begin+batch_size
+
         nb_from_batch = end - begin
         for name, array in kwargs.items():
+            self._ensure_enough_space_for(end)
             if len(array) != batch_size:
                 raise Exception("Arrays must have the same number of samples."
                                 " Got {} and {}".format(batch_size, len(array)))
@@ -177,7 +204,7 @@ class HDF5Dataset(h5py.File):
         """
         while True:
             self.append(**next(generator))
-            if self._append_pos >= self.nb_samples:
+            if self.nb_samples and self._append_pos >= self.nb_samples:
                 break
 
     def iter(self, batch_size, names=None):
@@ -185,15 +212,20 @@ class HDF5Dataset(h5py.File):
         if names is None:
             names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
 
+        if self.nb_samples is None:
+            nb_samples = len(self[names[0]])
+        else:
+            nb_samples = self.nb_samples
+
         while True:
             size = batch_size
             batch = {name: [] for name in names}
             while size > 0:
-                nb = min(self.nb_samples, i + size) - i
+                nb = min(nb_samples, i + size) - i
                 for name in names:
                     batch[name].append(self[name][i:i + nb])
                 size -= nb
-                i = (i + nb) % self.nb_samples
+                i = (i + nb) % nb_samples
             yield {name: np.concatenate(arrs) for name, arrs in batch.items()}
 
 
