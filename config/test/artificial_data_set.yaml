@@ -1,0 +1,11 @@
+# outputs to collect from the rendergan. E.g. fake, tag3d, ...
+selected_outputs: "fake"
+
+# Number of samples of the train set
+nb_train_samples: 100000
+
+# Number of samples of the test set
+nb_test_samples: 100000
+
+# RenderGAN epoch
+epoch: "010"

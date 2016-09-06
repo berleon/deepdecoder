@@ -37,14 +37,21 @@ setup(
             'bb_default_3d_tags_distribution = ' +
                 'deepdecoder.scripts.default_3d_tags_distribution:main',
             'bb_train_tag3d_network = deepdecoder.scripts.train_tag3d_network:main',
-            'bb_train_rendergan = deepdecoder.scripts.train_render_gan:main',
-            'bb_sample_artificial_trainset = deepdecoder.scripts.sample_artificial_trainset:main',
+            'bb_train_rendergan = deepdecoder.scripts.train_rendergan:main',
+            'bb_sample_from_rendergan = deepdecoder.scripts.sample_from_rendergan:main',
             'bb_train_decoder = deepdecoder.scripts.train_decoder:main',
             'bb_evalute_decoder = deepdecoder.scripts.evaluate_decoder:main',
+            'bb_make = deepdecoder.scripts.make:main',
         ]
     },
+    scripts=[
+        'scripts/bb_select_videos',
+    ],
     packages=[
         'deepdecoder',
         'deepdecoder.scripts',
-    ]
+    ],
+    package_data={
+        '': ['deepdecoder/scripts/Makefile']
+    }
 )

@@ -1,0 +1,15 @@
+
+# ground truth file
+ground_truth: "/mnt/storage/beesbook/datasets/truth_tags.hdf5"
+
+# marks the decoder path
+marker: "_"
+
+# augmentation flags: possible values: --noise --augmentation --hist-eq
+augmentations: "--hist-eq"
+
+# network units
+units: 16
+
+# only use sample with a discriminator score greater then this threshold
+discriminator_threshold: 0.05

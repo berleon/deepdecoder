@@ -326,7 +326,7 @@ def get_details(inputs, nb_units):
         conv(n, 3, 3),
         conv(n, 3, 3),
         Convolution2D(1, 3, 3, border_mode='same', init='normal'),
-        InBounds(-0.75, 0.75)
+        InBounds(-1, 1)
     ], ns='details')(concat(inputs))
 
 

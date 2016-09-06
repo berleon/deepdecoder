@@ -231,7 +231,8 @@ class DecoderModel(Enum):
 class DecoderTraining:
     def __init__(self, dataset_fnames, gt_fname, force, nb_epoch, nb_units,
                  use_augmentation, use_noise, use_hist_equalization,
-                 data_name, output_dir, decoder_model=DecoderModel.resnet):
+                 discriminator_threshold, data_name, output_dir,
+                 decoder_model=DecoderModel.resnet):
         self.dataset_fnames = dataset_fnames
         self.gt_fname = gt_fname
         self.force = force
@@ -239,6 +240,7 @@ class DecoderTraining:
         self.nb_units = nb_units
         self.use_augmentation = use_augmentation
         self.use_noise = use_noise
+        self.discriminator_threshold = discriminator_threshold
         self.data_name = data_name
         self.output_dir = output_dir
         self.use_hist_equalization = use_hist_equalization
@@ -268,6 +270,7 @@ class DecoderTraining:
             'use_augmentation': self.use_augmentation,
             'use_noise': self.use_noise,
             'use_hist_equalization': self.use_hist_equalization,
+            'discriminator_threshold': self.discriminator_threshold,
             'data_name': self.data_name,
             'output_dir': self.output_dir,
         }
@@ -329,8 +332,9 @@ class DecoderTraining:
         all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
             [n for n, _ in label_output_sizes]
         dataset_names = ['labels', 'discriminator', self.data_name]
-        dataset_iterators = [lambda bs: bit_split(dataset_iterator(dset, bs, dataset_names))
-                             for dset in datasets]
+        dataset_iterators = [lambda bs: bit_split(dataset_iterator(
+            dset, bs, dataset_names, self.discriminator_threshold))
+            for dset in datasets]
 
         def data_generator(bs):
             return zip_dataset_iterators(dataset_iterators, bs)
@@ -443,6 +447,8 @@ def main():
                         help='hdf5 files with the real groud truth data')
     parser.add_argument('-t', '--train-set', nargs='+', type=as_abs_path,
                         help='hdf5 files with the artificial train set')
+    parser.add_argument('--test-set', type=as_abs_path,
+                        help='hdf5 files with the artificial test set')
     parser.add_argument('--units', default=16, type=int,
                         help='number of units in the decoder.')
     parser.add_argument('--epoch', default=1000, type=int,
@@ -459,6 +465,10 @@ def main():
                         help='add gaussian noise to the images.')
     parser.add_argument('--hist-eq', action='store_true',
                         help='use histogram equalization.')
+    parser.add_argument('--discriminator-threshold', type=float, default=0.05,
+                        help='only use sample over this threshold.')
+    parser.add_argument('--make-json', type=str, default="",
+                        help='save bb_make file.')
     parser.add_argument('-f', '--force', action='store_true',
                         help='override existing output files')
     parser.add_argument('output_dir', type=as_abs_path,
@@ -477,9 +487,14 @@ def main():
 
     dt = DecoderTraining(args.train_set, args.gt, args.force, args.epoch, args.units,
                          args.augmentation, args.noise, args.hist_eq,
-                         args.dataset_name, output_dir,
-                         decoder_model=models[args.model])
+                         args.discriminator_threshold, args.dataset_name,
+                         output_dir, decoder_model=models[args.model])
     dt.run()
+
+    if args.make_json:
+        with open(args.make_json) as f:
+            json.dump(f, {"path": output_dir})
+
 
 if __name__ == "__main__":
     main()

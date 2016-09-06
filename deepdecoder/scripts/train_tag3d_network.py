@@ -43,7 +43,6 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     output_basename = os.path.join(output_dir, basename)
 
     tag_dataset = DistributionHDF5Dataset(tags_3d_hdf5_fname)
-
     print("Got {} images from the 3d model".format(tag_dataset.nb_samples))
     weights_fname = output_basename + ".hdf5"
     if os.path.exists(weights_fname) and not force:
@@ -54,9 +53,14 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
 
     def generator(batch_size):
         for batch in tag_dataset.iter(batch_size):
-            labels = batch['labels'].astype(np.float32)
+            labels = []
+            for name in batch['labels'].dtype.names:
+                labels.append(batch['labels'][name])
+            labels = np.concatenate(labels, axis=-1)
             yield labels, [batch['tag3d'], batch['depth_map']]
-
+    labels = next(generator(batch_size))[0]
+    print("labels.shape ", labels.shape)
+    print("labels.dtype ", labels.dtype)
     nb_input = next(generator(batch_size))[0].shape[1]
 
     x = Input(shape=(nb_input,))
@@ -68,7 +72,7 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     g.compile(optimizer, loss=['mse', 'mse'], loss_weights=[1, 1/3.])
 
     scheduler = AutomaticLearningRateScheduler(
-        optimizer, 'loss', epoch_patience=12, min_improvment=0.0002)
+        optimizer, 'loss', epoch_patience=12, min_improvement=0.0002)
     history = HistoryPerBatch()
     save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir,
                       hdf5_attrs=tag_dataset.get_distribution_hdf5_attrs())

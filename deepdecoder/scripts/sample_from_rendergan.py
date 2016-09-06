@@ -16,7 +16,6 @@
 import matplotlib
 matplotlib.use('Agg')  # noqa
 
-from keras.utils.generic_utils import Progbar
 from diktya.func_api_helpers import load_model, get_hdf5_attr, get_layer, predict_wrapper
 from deepdecoder.data import DistributionHDF5Dataset
 from deepdecoder.render_gan import render_gan_custom_objects
@@ -24,18 +23,23 @@ import diktya.distributions
 import argparse
 import numpy as np
 import os
+import progressbar
 
 
-def run(g_weights_fname, d_weights_fname, nb_samples, out_fname):
+def run(g_weights_fname, d_weights_fname, selected_outputs, nb_samples, out_fname):
     generator = load_model(g_weights_fname, render_gan_custom_objects())
     discriminator = load_model(d_weights_fname, render_gan_custom_objects())
+    generator._make_predict_function()
+    discriminator._make_predict_function()
     dist_json = get_hdf5_attr(g_weights_fname, 'distribution').decode('utf-8')
     dist = diktya.distributions.load_from_json(dist_json)
     os.makedirs(os.path.dirname(out_fname), exist_ok=True)
     dset = DistributionHDF5Dataset(out_fname, mode='w', nb_samples=nb_samples,
                                    distribution=dist)
     batch_size = 100
-    print(generator.output_names)
+    avialable_datasets = [name for name in generator.output_names
+                          if name != 'labels']
+    print("Avialable outputs: " + ", ".join(avialable_datasets))
     generator_predict = predict_wrapper(lambda x: generator.predict(x, batch_size),
                                         generator.output_names)
 
@@ -44,20 +48,29 @@ def run(g_weights_fname, d_weights_fname, nb_samples, out_fname):
         while True:
             z = np.random.uniform(-1, 1, (batch_size, ) + z_shape[1:])
             outs = generator_predict(z)
-            outs['discriminator'] = discriminator.predict(outs['fake'])
             raw_labels = outs.pop('labels')
             pos = 0
             labels = np.zeros(len(raw_labels), dtype=dist.norm_dtype)
             for name, size in dist.norm_nb_elems.items():
                 labels[name] = raw_labels[:, pos:pos+size]
                 pos += size
+            deleted_keys = []
+            if selected_outputs != 'all':
+                for name in list(outs.keys()):
+                    if name not in selected_outputs:
+                        del outs[name]
+                        deleted_keys.append(name)
+            if not outs:
+                raise Exception("Got no outputs. Removed {}. Selected outputs {}"
+                                .format(deleted_keys, selected_outputs))
             outs['labels'] = labels
+            outs['discriminator'] = discriminator.predict(outs['fake'])
             yield outs
 
-    progbar = Progbar(nb_samples)
+    bar = progressbar.ProgressBar(max_value=nb_samples)
     for batch in sample_generator():
         pos = dset.append(**batch)
-        progbar.update(pos)
+        bar.update(pos)
         if pos >= nb_samples:
             break
     dset.close()
@@ -73,11 +86,20 @@ def main():
                         help='generator hdf5 weights with model description')
     parser.add_argument('-d', '--discriminator', type=str,
                         help='discriminator hdf5 weights with model description')
-    parser.add_argument('-n', '--nb-samples', default=1000, type=int,
+    parser.add_argument('-n', '--nb-samples', default=1000, type=float,
                         help='number of epoch to train.')
+    parser.add_argument('-s', '--selected-outputs', default='all', type=str,
+                        help='name of datasets to collect.')
     parser.add_argument('output', type=str, help='write samples to this hdf5 filename')
     args = parser.parse_args()
-    run(args.generator, args.discriminator, args.nb_samples, args.output)
+    selected_outputs = args.selected_outputs
+    if selected_outputs != 'all':
+        selected_outputs = [name.replace(' ', '')
+                            for name in selected_outputs.split(",")]
+    print("Selected outputs: " + ", ".join(selected_outputs))
+    run(args.generator, args.discriminator, selected_outputs,
+        int(args.nb_samples), args.output)
+
 
 if __name__ == "__main__":
     main()

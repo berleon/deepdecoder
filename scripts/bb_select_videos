@@ -1,0 +1,12 @@
+#! /usr/bin/env bash
+
+if [ "$1" == "--help" ]; then
+    echo "bb_select_videos DIR NB_VIDEOS"
+    echo "Selects NB_VIDEOS videos from directory DIR."
+    exit 0
+fi
+
+video_dir=$1
+nb_videos=$2
+
+find $video_dir -name '*.avi' -o -name '*.mkv' | sort -R | head -n $nb_videos

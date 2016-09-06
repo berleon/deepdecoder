@@ -1,0 +1,8 @@
+# outputs to collect from the rendergan. E.g. fake, tag3d, ...
+selected_outputs: "fake"
+
+# Number of samples of the train set
+nb_train_samples: 5e6
+
+# Number of samples of the test set
+nb_test_samples: 1e5

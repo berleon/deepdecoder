@@ -35,28 +35,25 @@ def np_binary_mask(mask, black=0., ignore=0.5,  white=1.):
 
 def load_real_hdf5_tags(fname, batch_size):
     h5 = h5py.File(fname, 'r')
-    nb_tags = h5['tags'].shape[0]
+    nb_tags = h5['rois'].shape[0]
     nb_tags = (nb_tags // batch_size)*batch_size
-    tags = HDF5Tensor(fname, 'tags', 0, nb_tags)
+    tags = HDF5Tensor(fname, 'rois', 0, nb_tags)
     assert len(tags) % batch_size == 0
     return tags
 
 
-def real_generator(hdf5_fname, nb_real, use_mean_image=False, range=(0, 1)):
+def real_generator(hdf5_fname, batch_size, range=(0, 1)):
     low, high = range
-    tags = load_real_hdf5_tags(hdf5_fname, nb_real)
+    tags = load_real_hdf5_tags(hdf5_fname, batch_size)
     nb_tags = len(tags)
     print("Got {} real tags".format(nb_tags))
-    mean_end = min(nb_tags, 2000)
-    mean_image = (tags[0:mean_end] / 255).mean(axis=0)
-
-    for i in count(step=nb_real):
+    for i in count(step=batch_size):
         ti = i % nb_tags
-        assert ti + nb_real < nb_tags
-        tag_batch = tags[ti:ti+nb_real] / 255.
-        if use_mean_image:
-            tag_batch -= mean_image
-        yield (high - low)*tag_batch + low
+        assert ti + batch_size <= nb_tags, \
+            "end: {}, nb_tags: {}".format(ti + batch_size, nb_tags)
+        tag_batch = tags[ti:ti+batch_size] / 255.
+        tag_batch = (high - low)*tag_batch + low
+        yield tag_batch
 
 
 def z_generator(z_shape):
@@ -164,7 +161,8 @@ class HDF5Dataset(h5py.File):
 
     def _ensure_enough_space_for(self, size):
         for name in self.dataset_names():
-            self[name].resize(size, axis=0)
+            if len(self[name]) < size:
+                self[name].resize(size, axis=0)
 
     def append(self, **kwargs):
         """

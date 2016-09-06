@@ -25,6 +25,8 @@ from diktya.callbacks import VisualiseGAN, LearningRateScheduler, HistoryPerBatc
 from diktya.numpy import tile, zip_tile, scipy_gaussian_filter_2d
 from diktya.func_api_helpers import concat, save_model, load_model, predict_wrapper, \
     name_tensor
+from diktya.preprocessing.image import RandomWarpAugmentation, ImageAugmentation
+from diktya.numpy import image_save
 
 from keras.optimizers import Adam
 from keras.callbacks import Callback
@@ -32,7 +34,6 @@ from keras.engine.topology import Input, merge
 from keras.engine.training import Model
 import keras.backend as K
 
-import scipy.misc
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import OrderedDict
@@ -227,7 +228,7 @@ class RenderGAN:
             [blending, tag3d_segmented_blur, tag3d, out_offset_back,
              offset_back_feature_map] + light_outs, self.generator_units)
         outputs['details_offset'] = details
-        details_high_pass = HighPass(3.5, nb_steps=7)(details)
+        details_high_pass = HighPass(3.5, nb_steps=5)(details)
         outputs['details_high_pass'] = details_high_pass
         fake = InBounds(-1.0, 1.0)(
             merge([details_high_pass, blending], mode='sum'))
@@ -489,7 +490,15 @@ def train_callbacks(rendergan, output_dir, nb_visualise, real_hdf5_fname,
 def train_data_generator(real_hdf5_fname, batch_size, z_dim):
     for data in real_generator(real_hdf5_fname, batch_size, range=(-1, 1)):
         z = np.random.uniform(-1, 1, (3*batch_size, z_dim)).astype(np.float32)
-        # data = scipy_gaussian_filter_2d(real, sigma=2/3.)
+        size = 64
+        if data.shape[-2:] != (size, size):
+            translated_data = []
+            for sample in data:
+                translation = np.random.choice(np.arange(-5, 6))
+                offset = (data.shape[-1] - size) // 2 + translation
+                crop = slice(offset, size+offset)
+                translated_data.append(sample[:, crop, crop])
+            data = np.stack(translated_data)
         yield {
             'data': data,
             'z': z,
@@ -498,9 +507,12 @@ def train_data_generator(real_hdf5_fname, batch_size, z_dim):
 
 def save_real_images(real_hdf5_fname, output_dir, nb_visualise=20**2):
     real = next(train_data_generator(real_hdf5_fname, nb_visualise, 10))['data']
+    print(real.shape)
+    print(real.max())
+    print(real.min())
     tiled = tile(real)
     fname = join(output_dir, 'real_{}.png'.format(nb_visualise))
-    scipy.misc.imsave(fname, tiled[0])
+    image_save(fname, tiled[0])
 
 
 def train(rendergan, real_hdf5_fname, output_dir, callbacks=[],

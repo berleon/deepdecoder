@@ -26,7 +26,6 @@ def run(image_path_file, out, force):
 
     def add_to_cache(**kwargs):
         for name, arr in kwargs.items():
-            print("add {}: {}".format(name, arr.shape))
             if name not in cache:
                 cache[name] = [arr]
             else:
@@ -52,16 +51,20 @@ def run(image_path_file, out, force):
     dset = DistributionHDF5Dataset(out, distribution)
     bar = progressbar.ProgressBar(max_value=len(image_fnames))
     for i, image_fname in enumerate(bar(image_fnames)):
-        print(image_fname)
-        results = pipeline([image_fname])
-        rois, mask = Localizer.extract_rois(results[Positions], results[Image], roi_size)
+        try:
+            results = pipeline([image_fname])
+            rois, mask = Localizer.extract_rois(results[Positions], results[Image], roi_size)
+        except Exception as e:
+            print(e)
+            continue
+
         nb_detections = np.sum(mask)
         camIdx, dt = parse_image_fname(image_fname)
         season = np.array([dt.year] * nb_detections, dtype=np.uint16)
         timestamp = np.array([dt.timestamp()] * nb_detections, dtype=np.float64)
         results = results[DecoderPredictions][mask]
         add_to_cache(labels=results, rois=rois, season=season, timestamp=timestamp)
-        if i % 2 == 0 and i != 0:
+        if i % 50 == 0 and i != 0:
             flush_cache()
     flush_cache()
 
