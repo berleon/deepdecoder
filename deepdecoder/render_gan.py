@@ -25,7 +25,6 @@ from diktya.callbacks import VisualiseGAN, LearningRateScheduler, HistoryPerBatc
 from diktya.numpy import tile, zip_tile, scipy_gaussian_filter_2d
 from diktya.func_api_helpers import concat, save_model, load_model, predict_wrapper, \
     name_tensor
-from diktya.preprocessing.image import RandomWarpAugmentation, ImageAugmentation
 from diktya.numpy import image_save
 
 from keras.optimizers import Adam
@@ -197,11 +196,18 @@ class RenderGAN:
                                           nb_conv_layers=2)
         offset_middle_light = get_preprocess(concat(light_outs), self.preprocess_units,
                                              resize=['down', 'down'])
+
+        offset_middle_tag3d = get_preprocess(tag3d_downsampled,
+                                             self.preprocess_units // 2,
+                                             resize=['down', ''],
+                                             nb_conv_layers=2)
         out_offset_middle = get_offset_middle(
-            [out_offset_front, offset_depth_map, offset_middle_light], self.generator_units)
+            [out_offset_front, offset_depth_map,
+             offset_middle_light, offset_middle_tag3d],
+            self.generator_units)
 
         offset_back_tag3d_downsampled = get_preprocess(tag3d_downsampled,
-                                                       self.preprocess_units,
+                                                       self.preprocess_units // 2,
                                                        nb_conv_layers=2)
 
         offset_back_feature_map, out_offset_back = get_offset_back(
@@ -228,9 +234,9 @@ class RenderGAN:
             [blending, tag3d_segmented_blur, tag3d, out_offset_back,
              offset_back_feature_map] + light_outs, self.generator_units)
         outputs['details_offset'] = details
-        details_high_pass = HighPass(3.5, nb_steps=5)(details)
+        details_high_pass = HighPass(3.5, nb_steps=4)(details)
         outputs['details_high_pass'] = details_high_pass
-        fake = InBounds(-1.0, 1.0)(
+        fake = InBounds(-2.0, 2.0)(
             merge([details_high_pass, blending], mode='sum'))
         outputs['fake'] = fake
         for name in outputs.keys():
@@ -445,9 +451,9 @@ def train_callbacks(rendergan, output_dir, nb_visualise, real_hdf5_fname,
 
     def default_lr_schedule(lr):
         return {
-            150: lr / 4,
-            200: lr / 4**2,
-            250: lr / 4**3,
+            200: lr / 4,
+            250: lr / 4**2,
+            300: lr / 4**3,
         }
 
     def lr_scheduler(opt):

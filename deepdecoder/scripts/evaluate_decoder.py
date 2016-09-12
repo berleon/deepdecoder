@@ -20,7 +20,6 @@ from diktya.func_api_helpers import load_model, get_hdf5_attr, predict_wrapper
 from diktya.distributions import load_from_json
 import h5py
 import json
-from deepdecoder.scripts.train_decoder import DecoderTraining
 import pickle
 from collections import OrderedDict
 import time
@@ -48,7 +47,7 @@ def mean_hamming_distance(y_true, y_pred):
     return (np.sum(hd) - nb_intermediate) / len(hd)
 
 
-def get_predictions(tp: DecoderTraining, no_cache: bool):
+def get_predictions(tp: 'DecoderTraining', cache: bool):
     def _calculate_predictions():
         print("Loading GT data: {}".format(tp.gt_fname))
         h5_truth = h5py.File(tp.gt_fname)
@@ -92,7 +91,7 @@ def get_predictions(tp: DecoderTraining, no_cache: bool):
         return np.concatenate(bits_true), np.concatenate(bits_pred), time_per_sample
 
     cache_path = tp.outname("predictions_on_gt.pickle")
-    if os.path.exists(cache_path) and not no_cache:
+    if os.path.exists(cache_path) and cache:
         print("Loading predictions from: {}".format(cache_path))
         with open(cache_path, 'rb') as f:
             bits_true, bits_pred_probs, time_per_sample = pickle.load(f)
@@ -133,8 +132,8 @@ def print_results(results):
     print("Time per sample: {:5f}ms".format(results['time_per_sample']*1e3))
 
 
-def run(tp: DecoderTraining, no_cache: bool):
-    bits_true, bits_pred_probs, time_per_sample = get_predictions(tp, no_cache)
+def run(tp: 'DecoderTraining', cache: bool):
+    bits_true, bits_pred_probs, time_per_sample = get_predictions(tp, cache)
     results = {
         'time_per_sample': time_per_sample,
         'bits_true': bits_true.tolist(),
@@ -148,6 +147,8 @@ def run(tp: DecoderTraining, no_cache: bool):
 
 
 def main():
+    from deepdecoder.scripts.train_decoder import DecoderTraining
+
     def as_abs_path(x):
         if not os.path.exists(x):
             raise Exception("Path {} does not exists.".format(x))
@@ -158,7 +159,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Evaluate the decoder network')
 
-    parser.add_argument('--no-cache', action='store_true',
+    parser.add_argument('--cache', action='store_true',
                         help='recompute the predictions')
     parser.add_argument('dir', type=as_abs_path,
                         help='directory where the decoder is stored')
@@ -166,7 +167,7 @@ def main():
     with open(os.path.join(args.dir, 'training_params.json')) as f:
         config = json.load(f)
     dt = DecoderTraining(**config)
-    run(dt, args.no_cache)
+    run(dt, args.cache)
 
 if __name__ == "__main__":
     main()

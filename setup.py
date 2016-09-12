@@ -40,6 +40,7 @@ setup(
             'bb_train_rendergan = deepdecoder.scripts.train_rendergan:main',
             'bb_sample_from_rendergan = deepdecoder.scripts.sample_from_rendergan:main',
             'bb_train_decoder = deepdecoder.scripts.train_decoder:main',
+            'bb_train_multiple_decoders = deepdecoder.scripts.train_multiple_decoders:main',
             'bb_evalute_decoder = deepdecoder.scripts.evaluate_decoder:main',
             'bb_make = deepdecoder.scripts.make:main',
         ]
@@ -52,6 +53,6 @@ setup(
         'deepdecoder.scripts',
     ],
     package_data={
-        '': ['deepdecoder/scripts/Makefile']
+        'deepdecoder.scripts': ['Makefile']
     }
 )

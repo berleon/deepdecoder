@@ -1,5 +1,5 @@
 # outputs to collect from the rendergan. E.g. fake, tag3d, ...
-selected_outputs: "fake"
+selected_outputs: "tag3d, fake_without_noise, fake"
 
 # Number of samples of the train set
 nb_train_samples: 5e6

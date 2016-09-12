@@ -73,18 +73,19 @@ rendergan: tag3d_network real_dataset $(setting_dir)/rendergan.yaml
 render_gan_models_dir = $(call get,path,rendergan)/models/$(call setting,epoch,artificial_data_set.yaml)/
 artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 	$(ensure_out_dirs_exists)
+	$(eval artificial_data_set_date := $(shell date -Iseconds))
 	bb_sample_from_rendergan \
 		--generator ${render_gan_models_dir}/sample_generator_given_z.hdf5 \
 		--discriminator ${render_gan_models_dir}/discriminator.hdf5 \
 		--nb-samples $(call setting,nb_train_samples,artificial_data_set.yaml) \
 		--selected-outputs $(call setting,selected_outputs,artificial_data_set.yaml) \
-		${data}/artificial_train_set.hdf5
+		${data}/artificial_train_set_$(artificial_data_set_date).hdf5
 	bb_sample_from_rendergan \
 		--generator ${render_gan_models_dir}/sample_generator_given_z.hdf5 \
 		--discriminator ${render_gan_models_dir}/discriminator.hdf5 \
 		--nb-samples $(call setting,nb_test_samples,artificial_data_set.yaml) \
 		--selected-outputs $(call setting,selected_outputs,artificial_data_set.yaml) \
-		${data}/artificial_test_set.hdf5
+		${data}/artificial_test_set_$(artificial_data_set_date).hdf5
 	echo '{"train_set": "${data}/artificial_train_set.hdf5",\n' \
 		 '"test_set": "${data}/artificial_test_set.hdf5"}' \
 		 > artificial_data_set
@@ -98,6 +99,7 @@ decoder_model: artificial_data_set $(setting_dir)/decoder.yaml
 		--units $(call setting,units,decoder.yaml) \
 		--epoch 1000 \
 		--marker $(call setting,marker,decoder.yaml) \
+		--model $(call setting,model,decoder.yaml) \
 		--discriminator-threshold $(call setting,discriminator_threshold,decoder.yaml) \
 		--make-json decoder \
 		$(call setting,augmentations,decoder.yaml)   \

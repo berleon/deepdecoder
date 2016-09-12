@@ -9,4 +9,4 @@ nb_dense: "1024,1024"
 depth: 2
 
 # train this number of epochs
-epoch: 350
+epoch: 500

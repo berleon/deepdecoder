@@ -2,12 +2,11 @@
 
 from pipeline import Pipeline
 from pipeline.pipeline import get_auto_config
-from pipeline.objects import Filename, DecoderPredictions, Positions, Image
+from pipeline.objects import Filename, LocalizerPositions, Image
 from pipeline.stages.processing import Localizer
 from bb_binary import parse_image_fname
-from deepdecoder.data import DistributionHDF5Dataset
+from deepdecoder.data import HDF5Dataset
 import numpy as np
-from diktya.distributions import DistributionCollection
 import click
 import progressbar
 import os
@@ -42,18 +41,16 @@ def run(image_path_file, out, force):
 
     roi_size = 96
     image_fnames = [n.rstrip('\n') for n in image_path_file.readlines()]
-    config = get_auto_config()
-    decoder_path = config['Decoder']['model_path']
     pipeline = Pipeline([Filename],
-                        [Image, Positions, DecoderPredictions],
-                        **config)
-    distribution = DistributionCollection.from_hdf5(decoder_path)
-    dset = DistributionHDF5Dataset(out, distribution)
+                        [Image, LocalizerPositions],
+                        **get_auto_config())
+    dset = HDF5Dataset(out)
     bar = progressbar.ProgressBar(max_value=len(image_fnames))
     for i, image_fname in enumerate(bar(image_fnames)):
         try:
             results = pipeline([image_fname])
-            rois, mask = Localizer.extract_rois(results[Positions], results[Image], roi_size)
+            rois, mask = Localizer.extract_rois(results[LocalizerPositions],
+                                                results[Image], roi_size)
         except Exception as e:
             print(e)
             continue
@@ -62,8 +59,7 @@ def run(image_path_file, out, force):
         camIdx, dt = parse_image_fname(image_fname)
         season = np.array([dt.year] * nb_detections, dtype=np.uint16)
         timestamp = np.array([dt.timestamp()] * nb_detections, dtype=np.float64)
-        results = results[DecoderPredictions][mask]
-        add_to_cache(labels=results, rois=rois, season=season, timestamp=timestamp)
+        add_to_cache(rois=rois, season=season, timestamp=timestamp)
         if i % 50 == 0 and i != 0:
             flush_cache()
     flush_cache()

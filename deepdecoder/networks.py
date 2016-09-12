@@ -133,7 +133,7 @@ def tag3d_network_dense(input, nb_units=64, nb_dense_units=[512, 512],
             repeats = depth
         return [
             [
-                Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
+                Convolution2D(n, 3, 3, border_mode='same'),
                 Activation('relu')
             ] for _ in range(repeats)
         ]
@@ -160,12 +160,12 @@ def tag3d_network_dense(input, nb_units=64, nb_dense_units=[512, 512],
         UpSampling2D(),  # 64x64
         conv(n, 1),
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
-    ], ns='tag3d_gen.tag3d', trainable=trainable)(base)
+    ], ns='tag3d', trainable=trainable)(base)
 
     depth_map = sequential([
         conv(n // 2, depth - 1),
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
-    ], ns='tag3d_gen.depth_map', trainable=trainable)(base)
+    ], ns='depth_map', trainable=trainable)(base)
 
     return tag3d, depth_map
 
@@ -326,7 +326,7 @@ def get_details(inputs, nb_units):
         conv(n, 3, 3),
         conv(n, 3, 3),
         Convolution2D(1, 3, 3, border_mode='same', init='normal'),
-        InBounds(-1, 1)
+        InBounds(-2, 2)
     ], ns='details')(concat(inputs))
 
 

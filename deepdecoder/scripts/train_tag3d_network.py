@@ -25,7 +25,7 @@ from diktya.numpy import zip_tile
 from diktya.func_api_helpers import save_model
 
 from keras.models import Model
-from keras.optimizers import Adam
+from keras.optimizers import Adam, SGD, Nadam
 from keras.engine.topology import Input
 
 import numpy as np
@@ -56,8 +56,12 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
             labels = []
             for name in batch['labels'].dtype.names:
                 labels.append(batch['labels'][name])
+
+            assert not np.isnan(batch['tag3d']).any()
+            assert not np.isnan(batch['depth_map']).any()
             labels = np.concatenate(labels, axis=-1)
             yield labels, [batch['tag3d'], batch['depth_map']]
+
     labels = next(generator(batch_size))[0]
     print("labels.shape ", labels.shape)
     print("labels.dtype ", labels.dtype)
@@ -67,17 +71,20 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     mask, depth_map = tag3d_network_dense(x, nb_units=nb_units, depth=depth,
                                           nb_dense_units=nb_dense)
     g = Model(x, [mask, depth_map])
-    optimizer = Adam()
+    optimizer = SGD(momentum=0.8, nesterov=True)
 
     g.compile(optimizer, loss=['mse', 'mse'], loss_weights=[1, 1/3.])
 
     scheduler = AutomaticLearningRateScheduler(
-        optimizer, 'loss', epoch_patience=12, min_improvement=0.0002)
+        optimizer, 'loss', epoch_patience=5, min_improvement=0.0002)
     history = HistoryPerBatch()
     save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir,
                       hdf5_attrs=tag_dataset.get_distribution_hdf5_attrs())
-    g.fit_generator(generator(batch_size), samples_per_epoch=200*batch_size,
-                    nb_epoch=nb_epoch, verbose=1, callbacks=[scheduler, save, history])
+    history_plot = history.plot_callback(fname=output_basename + "_loss.png",
+                                         every_nth_epoch=10)
+    g.fit_generator(generator(batch_size), samples_per_epoch=800*batch_size,
+                    nb_epoch=nb_epoch, verbose=1,
+                    callbacks=[scheduler, save, history, history_plot])
 
     nb_visualize = 18**2
     vis_labels, (tags_3d, depth_map) = next(generator(nb_visualize))
