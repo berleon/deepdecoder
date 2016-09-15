@@ -34,6 +34,7 @@ import h5py
 from skimage.exposure import equalize_hist
 import time
 import json
+import sys
 import seaborn as sns
 import deepdecoder.scripts.evaluate_decoder as evaluate_decoder
 
@@ -266,7 +267,7 @@ class DecoderTraining:
         }
 
     def model_fname(self):
-        return self.outname("decoder.hdf5")
+        return self.outname("decoder.model")
 
     def save(self):
         fname = self.outname('training_params.json')
@@ -387,10 +388,12 @@ class DecoderTraining:
         scheduler = AutomaticLearningRateScheduler(
             model.optimizer, 'loss', epoch_patience=3, min_improvement=0.001,
             factor=0.1)
+        hdf5_attrs = get_distribution_hdf5_attrs(self.get_label_distributions())
+        hdf5_attrs['decoder_uses_hist_equalization'] = self.use_hist_equalization
         checkpointer = SaveModelAndWeightsCheckpoint(
-            self.outname('decoder.hdf5'), monitor='val_bits_loss',
+            self.model_fname(), monitor='val_bits_loss',
             verbose=0, save_best_only=True,
-            hdf5_attrs=get_distribution_hdf5_attrs(self.get_label_distributions()))
+            hdf5_attrs=hdf5_attrs)
         nb_batches_per_epoch = 1000
         plot_history = hist.plot_callback(
             fname=self.outname(marker + '_loss.png'),
