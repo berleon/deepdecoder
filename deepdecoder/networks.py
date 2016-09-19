@@ -306,7 +306,7 @@ def get_lighting_generator(inputs, nb_units):
         conv(n, 3, 3),
         Convolution2D(3, 1, 1, border_mode='same'),
         UpSampling2D(),  # 64x64
-        GaussianBlur(sigma=3.5),
+        GaussianBlur(sigma=2.5),
     ], ns='lighting')(input)
 
     shift = Subtensor(0, 1, axis=1)(light_conv)
@@ -693,7 +693,8 @@ def decoder_stochastic_wrn(label_sizes,
             out = merge([inputs, x], mode="sum", output_shape=x._keras_shape[1:])
 
             rnd_gate = rng.binomial((1, ), p=(1. - _death_rate), dtype="int8")
-            gate = ifelse(K.learning_phase(), rnd_gate[0], 1)
+            gate = ifelse(K.learning_phase(), rnd_gate[0],
+                          K.cast(1, 'int8'))
 
             m = Lambda(lambda tensors: ifelse(gate, tensors[0], tensors[1]),
                        output_shape=equal_gate_shape)([out, inputs])
@@ -738,8 +739,8 @@ def decoder_stochastic_wrn(label_sizes,
             out = merge([skip, residual], mode="sum")
 
             rnd_gate = rng.binomial((1, ), p=(1. - _death_rate), dtype="int8")
-            gate = ifelse(K.learning_phase(), rnd_gate[0], 1)
-
+            gate = ifelse(K.learning_phase(), rnd_gate[0],
+                          K.cast(1, 'int8'))
             m = Lambda(lambda tensors: K.switch(gate, tensors[0], tensors[1]),
                        output_shape=equal_gate_shape)([out, residual])
             return m
