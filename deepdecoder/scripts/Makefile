@@ -78,34 +78,48 @@ artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 		--generator ${render_gan_models_dir}/sample_generator_given_z.hdf5 \
 		--discriminator ${render_gan_models_dir}/discriminator.hdf5 \
 		--nb-samples $(call setting,nb_train_samples,artificial_data_set.yaml) \
-		--selected-outputs $(call setting,selected_outputs,artificial_data_set.yaml) \
+		--selected-outputs "$(call setting,selected_outputs,artificial_data_set.yaml)" \
 		${data}/artificial_train_set_$(artificial_data_set_date).hdf5
 	bb_sample_from_rendergan \
 		--generator ${render_gan_models_dir}/sample_generator_given_z.hdf5 \
 		--discriminator ${render_gan_models_dir}/discriminator.hdf5 \
 		--nb-samples $(call setting,nb_test_samples,artificial_data_set.yaml) \
-		--selected-outputs $(call setting,selected_outputs,artificial_data_set.yaml) \
+		--selected-outputs "$(call setting,selected_outputs,artificial_data_set.yaml)" \
 		${data}/artificial_test_set_$(artificial_data_set_date).hdf5
 	echo '{"train_set": "${data}/artificial_train_set.hdf5",\n' \
 		 '"test_set": "${data}/artificial_test_set.hdf5"}' \
 		 > artificial_data_set
 
-decoder_model: artificial_data_set $(setting_dir)/decoder.yaml
+decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt.yaml
 	$(ensure_out_dirs_exists)
+	mkdir -p $(models)/decoder
 	bb_train_decoder \
-		--gt $(call setting,ground_truth,decoder.yaml) \
+		--gt-val $(call setting,gt_val,gt.yaml) \
+		--gt-test $(call setting,gt_test,gt.yaml) \
 		--train-set $(call get,train_set,artificial_data_set) \
-		--test-set $(call get,train_set,artificial_data_set) \
+		--test-set $(call get,test_set,artificial_data_set) \
 		--units $(call setting,units,decoder.yaml) \
-		--epoch 1000 \
+		--epoch 120 \
 		--marker $(call setting,marker,decoder.yaml) \
 		--model $(call setting,model,decoder.yaml) \
 		--discriminator-threshold $(call setting,discriminator_threshold,decoder.yaml) \
 		--make-json decoder \
 		$(call setting,augmentations,decoder.yaml)   \
-		$(models)
+		$(models)/decoder
 
 decoder_evaluation:
 	bb_evaluate_decoder  $(call get,path,decoder)
 
 decoder: decoder_model decoder_evaluation
+
+multiple_decoders: artificial_data_set $(setting_dir)/multiple_decoders.yaml $(setting_dir)/gt.yaml
+	bb_train_multiple_decoders  \
+		--force  \
+		--gt $(call setting,ground_truth,gt.yaml) \
+		--train-set $(call get,train_set,artificial_data_set) \
+		--test-set $(call get,test_set,artificial_data_set) \
+		--units $(call setting,units,multiple_decoders.yaml) \
+		--model $(call setting,model,multiple_decoders.yaml) \
+		--dataset-names "$(call setting,dataset_names,multiple_decoders.yaml)" \
+		$(models)/multi_decoders
+

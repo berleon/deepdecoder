@@ -25,8 +25,9 @@ import numpy as np
 from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, Callback
 from keras.optimizers import SGD
-from diktya.callbacks import AutomaticLearningRateScheduler, HistoryPerBatch, \
-    SaveModelAndWeightsCheckpoint, OnEpochEnd
+import keras.backend as K
+from diktya.callbacks import LearningRateScheduler, HistoryPerBatch, \
+    SaveModelAndWeightsCheckpoint, OnEpochEnd, DotProgressBar
 from diktya.numpy import scipy_gaussian_filter_2d, image_save, tile
 from diktya.preprocessing.image import RandomNoiseAugmentation, RandomWarpAugmentation, random_std
 from enum import Enum
@@ -34,32 +35,54 @@ import h5py
 from skimage.exposure import equalize_hist
 import time
 import json
-import sys
 import seaborn as sns
 import deepdecoder.scripts.evaluate_decoder as evaluate_decoder
 
-def augmentation_data_generator(data_generator, data_name, label_names,
-                                use_augmentation=True, noise=True):
-    augmentation = RandomWarpAugmentation(
-        rotation=(-0.15*np.pi, 0.15*np.pi),
-        scale=(0.8, 1.2),
-        shear=(0.2*np.pi, -0.2*np.pi),
-    )
 
-    aug_noise = RandomNoiseAugmentation(random_std(0.10, 0.08))
+class Preprocessing:
+    def __init__(self,
+                 use_augmentation=True,
+                 use_noise=True,
+                 use_hist_eq=True,
+                 ):
+        self.use_augmentation = use_augmentation
+        self.use_noise = use_noise
+        self.use_hist_eq = use_hist_eq
+        self.aug_warp = RandomWarpAugmentation(
+            rotation=(-0.15*np.pi, 0.15*np.pi),
+            scale=(0.8, 1.2),
+            shear=(0.2*np.pi, -0.2*np.pi),
+        )
+        self.aug_noise = RandomNoiseAugmentation(random_std(0.07, 0.04))
 
-    def wrapper(batch_size):
-        for batch in data_generator(batch_size):
-            data = batch[data_name]
-            if use_augmentation:
-                data = augmentation(data)
-            if noise:
-                data = aug_noise(data)
-            labels = []
-            for name in label_names:
-                labels.append(batch[name])
-            yield np.clip(data, -1, 1), labels
-    return wrapper
+    @staticmethod
+    def hist_equalisation(data):
+        eq_imgs = []
+        for img in data:
+            eq_imgs.append(2*equalize_hist(img) - 1)
+        return np.array(eq_imgs)
+
+    @staticmethod
+    def crop(data, shape=(64, 64)):
+        if data.shape[-2:] != shape:
+            h, w = data.shape[-2:]
+            assert h >= shape[0] and w >= shape[1]
+            hc = h // 2
+            wc = h // 2
+            return data[:, :, hc-32:hc+32, wc-32:wc+32]
+        else:
+            return data
+
+    def __call__(self, data):
+        data = self.crop(data)
+
+        if self.use_hist_eq:
+            data = hist_equalisation(data)
+        if self.use_augmentation:
+            data = self.aug_warp(data)
+        if self.use_noise:
+            data = self.aug_noise(data)
+        return data
 
 
 def dataset_iterator(dataset, batch_size, names=None, d_threshold=0.05):
@@ -150,32 +173,22 @@ def bit_split(generator):
 
 
 def truth_generator(h5_truth, batch_size,
-                    missing_label_sizes,
-                    use_blur=False):
-    def int_id_to_binary(id):
-        result = np.zeros(12, dtype=np.int)
-        a = 11
-        while id:
-            result[a] = id & 1
-            id >>= 1
-            a -= 1
-        return result
-
+                    missing_label_sizes):
     truth_tags = h5_truth['tags']
-    truth_labels = h5_truth['labels']
+    truth_bits = h5_truth['bits']
+    nb_bits = truth_bits.shape[-1]
     idx = 0
     while True:
         if idx + batch_size > truth_tags.shape[0]:
             idx = 0
         tags = (truth_tags[idx:idx+batch_size] / 255.)
-        if use_blur:
-            tags = scipy_gaussian_filter_2d(tags, 2/3, axis=-1)
+        tags = Preprocessing.crop(tags)
         tags = tags * 2 - 1
-        labels = list(np.array([int_id_to_binary(i)[::-1]
-                                for i in truth_labels[idx:idx+batch_size]]).T)
+
+        labels = [truth_bits[idx:idx+batch_size][:, i] for i in range(nb_bits)]
         missing_labels = [np.zeros((batch_size, size), dtype=np.float32)
                           for _, size in missing_label_sizes]
-        yield tags[:, np.newaxis], labels + missing_labels
+        yield tags, labels + missing_labels
         idx += batch_size
 
 
@@ -206,7 +219,8 @@ class CollectBitsLoss(Callback):
 
 
 def save_samples(data, bits, outfname):
-    nb_bits = len(bits[0])
+    print("bits", bits.shape)
+    nb_bits = bits.shape[1]
     for i in range(len(data)):
         s = 64 // nb_bits
         for j in range(nb_bits):
@@ -215,12 +229,14 @@ def save_samples(data, bits, outfname):
 
 
 class DecoderTraining:
-    def __init__(self, dataset_fnames, gt_fname, force, nb_epoch, nb_units,
+    def __init__(self, dataset_fnames, gt_val_fname, gt_test_fname,
+                 force, nb_epoch, nb_units,
                  use_augmentation, use_noise, use_hist_equalization,
                  discriminator_threshold, data_name, output_dir,
                  decoder_model='resnet'):
         self.dataset_fnames = dataset_fnames
-        self.gt_fname = gt_fname
+        self.gt_val_fname = gt_val_fname
+        self.gt_test_fname = gt_test_fname
         self.force = force
         self.nb_epoch = nb_epoch
         self.nb_units = nb_units
@@ -253,7 +269,8 @@ class DecoderTraining:
     def to_config(self):
         return {
             'dataset_fnames': self.dataset_fnames,
-            'gt_fname': self.gt_fname,
+            'gt_val_fname': self.gt_val_fname,
+            'gt_test_fname': self.gt_test_fname,
             'force': self.force,
             'nb_epoch': self.nb_epoch,
             'nb_units': self.nb_units,
@@ -300,7 +317,8 @@ class DecoderTraining:
         print("   Training sets:    {}".format(self.dataset_fnames[0]))
         for fname in self.dataset_fnames[1:]:
             print("                     {}".format(fname))
-        print("   GT data:          {}".format(self.gt_fname))
+        print("   GT val data:      {}".format(self.gt_val_fname))
+        print("   GT test data:     {}".format(self.gt_test_fname))
         print("   dataset name:     {}".format(self.data_name))
         print("   output dir:       {}".format(self.output_dir))
         print("   model:            {}".format(self.decoder_model))
@@ -328,16 +346,15 @@ class DecoderTraining:
             dset, bs, dataset_names, self.discriminator_threshold))
             for dset in datasets]
 
-        def data_generator(bs):
-            return zip_dataset_iterators(dataset_iterators, bs)
+        preprocess = Preprocessing(self.use_augmentation, self.use_noise,
+                                   self.use_hist_equalization)
 
-        aug_gen = augmentation_data_generator(data_generator, self.data_name, all_label_names,
-                                              use_augmentation=self.use_augmentation,
-                                              noise=self.use_noise)
-        if self.use_hist_equalization:
-            return lambda bs: hist_equalisation(aug_gen(bs))
-        else:
-            return aug_gen
+        def wrapper(bs):
+            for batch in zip_dataset_iterators(dataset_iterators, bs):
+                data = batch[self.data_name]
+                labels = [batch[l] for l in all_label_names]
+                yield preprocess(data), labels
+        return wrapper
 
     def truth_generator_factory(self, h5_truth, missing_label_sizes):
         def wrapper(bs):
@@ -361,10 +378,11 @@ class DecoderTraining:
         self.save()
         self.summary()
         # save samples
-        h5_truth = h5py.File(self.gt_fname)
+        gt_val = h5py.File(self.gt_val_fname)
+        print("bits", gt_val["bits"].shape)
         nb_vis_samples = 20**2
         data_gen = self.data_generator_factory()
-        truth_gen_only_bits = self.truth_generator_factory(h5_truth, missing_label_sizes=[])
+        truth_gen_only_bits = self.truth_generator_factory(gt_val, missing_label_sizes=[])
         check_samples = 100
         self.check_generator(data_gen(check_samples), "train")
         self.check_generator(truth_gen_only_bits(check_samples), "test")
@@ -375,6 +393,7 @@ class DecoderTraining:
                      self.outname(marker + "_train_samples.png"))
         gt_data, gt_bits = next(truth_gen_only_bits(nb_vis_samples))
         gt_bits = np.array(gt_bits).T
+        print("gt_data", gt_data.shape)
         save_samples(gt_data[:, 0], gt_bits,
                      self.outname(marker + "_test_samples.png"))
         # build model
@@ -384,10 +403,18 @@ class DecoderTraining:
         # setup training
         hist = HistoryPerBatch(self.output_dir, extra_metrics=['bits_loss', 'val_bits_loss'])
         hist_saver = OnEpochEnd(lambda e, l: hist.save(), every_nth_epoch=5)
-        stopper = EarlyStopping(monitor='val_loss', patience=35, verbose=0, mode='auto')
-        scheduler = AutomaticLearningRateScheduler(
-            model.optimizer, 'loss', epoch_patience=3, min_improvement=0.001,
-            factor=0.1)
+
+        def lr_schedule(optimizer):
+            lr = K.get_value(optimizer.lr)
+            return {
+                80: lr / 10.,
+                100: lr / 100.,
+                110: lr / 1000.,
+            }
+
+
+        scheduler = LearningRateScheduler(
+            model.optimizer, lr_schedule(model.optimizer))
         hdf5_attrs = get_distribution_hdf5_attrs(self.get_label_distributions())
         hdf5_attrs['decoder_uses_hist_equalization'] = self.use_hist_equalization
         checkpointer = SaveModelAndWeightsCheckpoint(
@@ -399,15 +426,15 @@ class DecoderTraining:
             fname=self.outname(marker + '_loss.png'),
             metrics=['bits_loss', 'val_bits_loss'])
         # train
-        truth_gen = self.truth_generator_factory(h5_truth, label_output_sizes)
+        truth_gen = self.truth_generator_factory(gt_val, label_output_sizes)
         model.fit_generator(
             data_gen(bs),
             samples_per_epoch=bs*nb_batches_per_epoch, nb_epoch=self.nb_epoch,
             callbacks=[CollectBitsLoss(), scheduler, checkpointer, hist,
-                       plot_history, stopper, hist_saver],
+                       plot_history, hist_saver, DotProgressBar()],
             verbose=0,
             validation_data=truth_gen(bs),
-            nb_val_samples=h5_truth['tags'].shape[0],
+            nb_val_samples=gt_val['tags'].shape[0],
             nb_worker=1, max_q_size=4*10, pickle_safe=False
         )
         evaluate_decoder.run(self, cache=False)
@@ -439,8 +466,10 @@ def main():
 
     parser = argparse.ArgumentParser(
         description='Train the decoder network')
-    parser.add_argument('-g', '--gt', type=as_abs_path,
-                        help='hdf5 files with the real groud truth data')
+    parser.add_argument('-g', '--gt-test', type=as_abs_path,
+                        help='hdf5 files with the test real groud truth data')
+    parser.add_argument('-gv', '--gt-val', type=as_abs_path,
+                        help='hdf5 files with the validation real groud truth data')
     parser.add_argument('-t', '--train-set', nargs='+', type=as_abs_path,
                         help='hdf5 files with the artificial train set')
     parser.add_argument('--test-set', type=as_abs_path,
@@ -475,7 +504,9 @@ def main():
         args.output_dir, args.model, args.units, args.augmentation,
         args.noise, args.hist_eq, args.dataset_name, args.marker)
 
-    dt = DecoderTraining(args.train_set, args.gt, args.force, args.epoch, args.units,
+    dt = DecoderTraining(args.train_set, args.gt_val,
+                         args.gt_test,
+                         args.force, args.epoch, args.units,
                          args.augmentation, args.noise, args.hist_eq,
                          args.discriminator_threshold, args.dataset_name,
                          output_dir, decoder_model=args.model)

@@ -49,8 +49,8 @@ def mean_hamming_distance(y_true, y_pred):
 
 def get_predictions(tp: 'DecoderTraining', cache: bool):
     def _calculate_predictions():
-        print("Loading GT data: {}".format(tp.gt_fname))
-        h5_truth = h5py.File(tp.gt_fname)
+        print("Loading GT data: {}".format(tp.gt_test_fname))
+        h5_truth = h5py.File(tp.gt_test_fname)
         decoder = Decoder(tp.model_fname())
         print("Loaded decoder. Got model with {:.2f} million parameters."
               .format(decoder.model.count_params() / 1e6))

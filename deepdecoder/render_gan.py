@@ -234,7 +234,7 @@ class RenderGAN:
             [blending, tag3d_segmented_blur, tag3d, out_offset_back,
              offset_back_feature_map] + light_outs, self.generator_units)
         outputs['details_offset'] = details
-        details_high_pass = HighPass(3.5, nb_steps=4)(details)
+        details_high_pass = HighPass(3.5, nb_steps=3)(details)
         outputs['details_high_pass'] = details_high_pass
         fake = InBounds(-2.0, 2.0)(
             merge([details_high_pass, blending], mode='sum'))

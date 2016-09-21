@@ -621,6 +621,45 @@ def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12
     return model
 
 
+class ScaleInTestPhase(Layer):
+    def __init__(self, death_rate, **kwargs):
+        self.death_rate = K.variable(death_rate)
+        self.uses_learning_phase = True
+        super().__init__(**kwargs)
+
+    def call(self, x, mask=None):
+        return K.in_test_phase((K.ones_like(x) - self.death_rate) * x, x)
+
+    def get_config(self):
+        config = {'death_rate': K.get_value(self.death_rate)}
+        base_config = super().get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
+class RandomSwitch(Layer):
+    def __init__(self, death_rate, **kwargs):
+        self.death_rate = K.variable(death_rate)
+        self.rng = RandomStreams()
+        self.uses_learning_phase = True
+        super().__init__(**kwargs)
+
+    def get_output_shape_for(self, input_shapes):
+        a_shape, b_shape = input_shapes[:2]
+        assert a_shape == b_shape
+        return a_shape
+
+    def call(self, x, mask=None):
+        a, b = x[:2]
+        rnd_gate = self.rng.binomial(a.shape[1:], p=(1. - self.death_rate), dtype="int8")
+        gate = K.in_train_phase(rnd_gate, K.cast(1, 'int8'))
+        return K.switch(gate, a, b)
+
+    def get_config(self):
+        config = {'death_rate': K.get_value(self.death_rate)}
+        base_config = super().get_config()
+        return dict(list(base_config.items()) + list(config.items()))
+
+
 def decoder_stochastic_wrn(label_sizes,
                            nb_bits=12,
                            data_shape=(1, 64, 64),
@@ -633,14 +672,7 @@ def decoder_stochastic_wrn(label_sizes,
                            wrn_k=2,
                            death_rate=0.5,
                            optimizer='adam'):
-    class TestScale(Layer):
-        def __init__(self, death_rate, **kwargs):
-            self.death_rate = death_rate
-            self.uses_learning_phase = True
-            super(TestScale, self).__init__(**kwargs)
 
-        def call(self, x, mask=None):
-            return K.in_test_phase((K.ones_like(x) - self.death_rate) * x, x)
 
     def norm_act_block():
         def f(inputs):
@@ -685,20 +717,13 @@ def decoder_stochastic_wrn(label_sizes,
             if not stochastic:
                 return merge((inputs, x), mode='sum')
 
-            _death_rate = K.variable(death_rate)
-            stochastic_layers.append(_death_rate)
-
-            x = TestScale(_death_rate)(x)
+            scale = ScaleInTestPhase(death_rate)
+            x = scale(x)
 
             out = merge([inputs, x], mode="sum", output_shape=x._keras_shape[1:])
-
-            rnd_gate = rng.binomial((1, ), p=(1. - _death_rate), dtype="int8")
-            gate = ifelse(K.learning_phase(), rnd_gate[0],
-                          K.cast(1, 'int8'))
-
-            m = Lambda(lambda tensors: ifelse(gate, tensors[0], tensors[1]),
-                       output_shape=equal_gate_shape)([out, inputs])
-            return m
+            rs = RandomSwitch(death_rate)
+            stochastic_layers.append((rs.death_rate, scale.death_rate))
+            return rs([out, inputs])
         return f
 
     def residual_reduction_block(nb_filter):
@@ -731,23 +756,16 @@ def decoder_stochastic_wrn(label_sizes,
         if not stochastic:
             return merge((skip, residual), mode='sum')
         else:
-            _death_rate = K.variable(death_rate)
-            stochastic_layers.append(_death_rate)
-
-            skip = TestScale(_death_rate)(skip)
+            scale = ScaleInTestPhase(death_rate)
+            skip = scale(skip)
 
             out = merge([skip, residual], mode="sum")
-
-            rnd_gate = rng.binomial((1, ), p=(1. - _death_rate), dtype="int8")
-            gate = ifelse(K.learning_phase(), rnd_gate[0],
-                          K.cast(1, 'int8'))
-            m = Lambda(lambda tensors: K.switch(gate, tensors[0], tensors[1]),
-                       output_shape=equal_gate_shape)([out, residual])
-            return m
+            rs = RandomSwitch(death_rate)
+            stochastic_layers.append((rs.death_rate, scale.death_rate))
+            return rs([out, residual])
 
     n = (wrn_depth - 4) // 6
     stochastic_layers = []
-    rng = RandomStreams()
 
     input = Input(shape=data_shape)
 
@@ -782,8 +800,9 @@ def decoder_stochastic_wrn(label_sizes,
     x = AveragePooling2D(pool_size=(8, 8))(x)
     x = dropout()(x)
 
-    for i, tb in enumerate(stochastic_layers, start=0):
+    for i, (tb, ts) in enumerate(stochastic_layers, start=0):
         K.set_value(tb, i / len(stochastic_layers) * death_rate)
+        K.set_value(ts, i / len(stochastic_layers) * death_rate)
 
     outputs, losses = decoder_end_block(x, label_sizes, nb_bits, activation, weight_decay)
 

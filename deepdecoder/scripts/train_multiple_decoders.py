@@ -38,6 +38,7 @@ def main(gt, train_set, test_set, units, model, dataset_names,
     augmentations = [
         '',
         '--augmentation',
+        '--augmentation --hist-eq',
         '--noise',
         '--augmentation --noise --hist-eq',
         '--hist-eq',
