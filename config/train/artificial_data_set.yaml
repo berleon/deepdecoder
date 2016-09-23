@@ -6,3 +6,5 @@ nb_train_samples: 5e6
 
 # Number of samples of the test set
 nb_test_samples: 1e5
+
+epoch: 350

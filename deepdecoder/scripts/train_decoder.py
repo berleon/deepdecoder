@@ -17,96 +17,59 @@ import matplotlib
 matplotlib.use('Agg')  # noqa
 
 import matplotlib.pyplot as plt
-from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn
+from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn, decoder_dummy
 from deepdecoder.data import DistributionHDF5Dataset, get_distribution_hdf5_attrs
-import argparse
 import os
 import numpy as np
-from keras.preprocessing.image import ImageDataGenerator
 from keras.callbacks import EarlyStopping, Callback
 from keras.optimizers import SGD
 import keras.backend as K
 from diktya.callbacks import LearningRateScheduler, HistoryPerBatch, \
     SaveModelAndWeightsCheckpoint, OnEpochEnd, DotProgressBar
-from diktya.numpy import scipy_gaussian_filter_2d, image_save, tile
-from diktya.preprocessing.image import RandomNoiseAugmentation, RandomWarpAugmentation, random_std
-from enum import Enum
+from diktya.numpy import image_save, tile
+from diktya.preprocessing.image import NoiseAugmentation, WarpAugmentation, \
+    CropAugmentation, random_std, chain_augmentations, HistEqualization, \
+    ChannelScaleShiftAugmentation
 import h5py
 from skimage.exposure import equalize_hist
 import time
 import json
+import yaml
 import seaborn as sns
 import deepdecoder.scripts.evaluate_decoder as evaluate_decoder
+import click
+import sys
 
 
-class Preprocessing:
-    def __init__(self,
-                 use_augmentation=True,
-                 use_noise=True,
-                 use_hist_eq=True,
-                 ):
-        self.use_augmentation = use_augmentation
-        self.use_noise = use_noise
-        self.use_hist_eq = use_hist_eq
-        self.aug_warp = RandomWarpAugmentation(
-            rotation=(-0.15*np.pi, 0.15*np.pi),
-            scale=(0.8, 1.2),
-            shear=(0.2*np.pi, -0.2*np.pi),
-        )
-        self.aug_noise = RandomNoiseAugmentation(random_std(0.07, 0.04))
-
-    @staticmethod
-    def hist_equalisation(data):
-        eq_imgs = []
-        for img in data:
-            eq_imgs.append(2*equalize_hist(img) - 1)
-        return np.array(eq_imgs)
-
-    @staticmethod
-    def crop(data, shape=(64, 64)):
-        if data.shape[-2:] != shape:
-            h, w = data.shape[-2:]
-            assert h >= shape[0] and w >= shape[1]
-            hc = h // 2
-            wc = h // 2
-            return data[:, :, hc-32:hc+32, wc-32:wc+32]
+def filter_by_discriminator_score(batch, threshold):
+    d_score = batch['discriminator']
+    goodenough = d_score.reshape((-1,)) >= threshold
+    if len(goodenough) == 0:
+        return None
+    for name, arr in batch.items():
+        if len(goodenough) == 1:
+            batch[name] = arr[goodenough, np.newaxis]
         else:
-            return data
-
-    def __call__(self, data):
-        data = self.crop(data)
-
-        if self.use_hist_eq:
-            data = hist_equalisation(data)
-        if self.use_augmentation:
-            data = self.aug_warp(data)
-        if self.use_noise:
-            data = self.aug_noise(data)
-        return data
+            batch[name] = arr[goodenough]
+    return batch
 
 
-def dataset_iterator(dataset, batch_size, names=None, d_threshold=0.05):
+def dataset_iterator(dataset, batch_size, names=None, d_threshold=0.05, shuffle=False):
     def len_batch(b):
-        return len(b['discriminator'])
+        return len(next(iter(b.values())))
 
     def nb_cached():
         return sum([len_batch(b) for b in cache])
 
     cache = []
-    for batch in dataset.iter(2*batch_size, names):
+    for batch in dataset.iter(2*batch_size, names, shuffle=shuffle):
         labels = batch.pop('labels')
-        d_score = batch['discriminator']
-        goodenough = d_score.reshape((-1,)) >= d_threshold
-        if len(goodenough) == 0:
-            continue
         for name in labels.dtype.names:
             batch[name] = labels[name]
-        for name, arr in batch.items():
-            if len(goodenough) == 1:
-                batch[name] = arr[goodenough, np.newaxis]
-            else:
-                batch[name] = arr[goodenough]
-        assert len(batch['discriminator'].shape) == 2
+        if 'discriminator' in batch:
+            batch = filter_by_discriminator_score(batch, d_threshold)
+            if batch is None:
+                continue
         cache.append(batch)
         if nb_cached() >= batch_size:
             batch = {name: np.zeros((batch_size,) + arr.shape[1:])
@@ -178,12 +141,11 @@ def truth_generator(h5_truth, batch_size,
     truth_bits = h5_truth['bits']
     nb_bits = truth_bits.shape[-1]
     idx = 0
+    crop = CropAugmentation(0, (64, 64))
     while True:
         if idx + batch_size > truth_tags.shape[0]:
             idx = 0
-        tags = (truth_tags[idx:idx+batch_size] / 255.)
-        tags = Preprocessing.crop(tags)
-        tags = tags * 2 - 1
+        tags = crop(truth_tags[idx:idx+batch_size])
 
         labels = [truth_bits[idx:idx+batch_size][:, i] for i in range(nb_bits)]
         missing_labels = [np.zeros((batch_size, size), dtype=np.float32)
@@ -229,28 +191,96 @@ def save_samples(data, bits, outfname):
 
 
 class DecoderTraining:
-    def __init__(self, dataset_fnames, gt_val_fname, gt_test_fname,
-                 force, nb_epoch, nb_units,
-                 use_augmentation, use_noise, use_hist_equalization,
-                 discriminator_threshold, data_name, output_dir,
-                 decoder_model='resnet'):
-        self.dataset_fnames = dataset_fnames
-        self.gt_val_fname = gt_val_fname
-        self.gt_test_fname = gt_test_fname
-        self.force = force
-        self.nb_epoch = nb_epoch
-        self.nb_units = nb_units
-        self.use_augmentation = use_augmentation
-        self.use_noise = use_noise
-        self.discriminator_threshold = discriminator_threshold
-        self.data_name = data_name
-        self.output_dir = output_dir
-        self.use_hist_equalization = use_hist_equalization
-        if decoder_model not in ('resnet', 'stochastic_wrn'):
-            raise Exception("Expected resnet or stochastic_wrn for decoder_model. "
-                            "Got {}.".format(decoder_model))
-        self.decoder_model = decoder_model
+    def __init__(self, config, default=None):
+        self.config = config
+        self.default = default or DecoderTraining.default()
+        missing = []
+        for name, default_value in self.default.items():
+            if default_value is None and name not in config:
+                missing.append(name)
+        if missing:
+            raise Exception("Following keys are missing {}."
+                            .format(", ".join(missing)))
+        wrong_keys = []
+        for name in config.keys():
+            if name not in self.default:
+                wrong_keys.append(name)
+
+        if wrong_keys:
+            raise Exception("Following keys are given but not found in default {}."
+                            .format(", ".join(wrong_keys)))
         self._label_distribution = None
+
+    @staticmethod
+    def default():
+        """
+        Defaults:
+            gt_test (path): hdf5 files with the test real groud truth data.
+            gt_val (path): hdf5 files with the validation real groud truth data.
+            train_set (path): hdf5 files with the train set.
+            test_set (path): hdf5 files with the artificial test set.
+            nb_units (int):number of nb_units in the decoder. (default ``16``)
+            epoch (int): number of epoch to train. (default ``120``)
+            model (str): decoder model type. either resnet or stochastic_wrn (default ``resnet``).
+            data_name (str): get the images from this dataset (default ``fake``).
+            marker (str): marker for the output dir. (default ``""`` )
+            discriminator_threshold (float): only use sample over this threshold. (default ``0.02``)
+            make-json (path): save bb_make file under this path.
+            output_dir (path): directory where to save the model weights.
+        """
+        return {
+            'train_sets': None,
+            'test_set': None,
+            'gt_val_fname': None,
+            'gt_test_fname': None,
+            'nb_epoch': 120,
+            'nb_units': 16,
+            'nb_batches_per_epoch': 1000,
+            'batch_size': 128,
+            'use_hist_equalization': False,
+            'use_warp_augmentation': False,
+            'use_noise_augmentation': False,
+            'use_channel_scale_shift_augmentation': False,
+            'augmentation_rotation': 0.1 * np.pi,
+            'augmentation_scale': (0.8, 1.2),
+            'augmentation_shear': (-0.2, 0.2),
+            'augmentation_channel_scale': (0.8, 1.5),
+            'augmentation_channel_shift': (-0.5, 0.5),
+            'augmentation_noise_mean': 0.07,
+            'augmentation_noise_std': 0.05,
+            'discriminator_threshold': 0.02,
+            'decoder_model': 'resnet',
+            'data_name': None,
+            'shuffle_data': False,
+            'output_dir': None,
+            'marker': "",
+            'verbose': 0,
+        }
+
+    @staticmethod
+    def from_config(fname):
+        return DecoderTraining.from_yaml_config(fname)
+
+    @staticmethod
+    def from_yaml_config(fname):
+        with open(fname) as f:
+            config = yaml.load(f)
+            return DecoderTraining(config, DecoderTraining.default())
+
+    def __getitem__(self, name):
+        if name not in self.default:
+            raise Exception("Unknown key name {}.".format(name))
+
+        return self.config.get(name, self.default[name])
+
+    def __getattr__(self, name):
+        return self[name]
+
+    def get_config(self):
+        return {
+            'config': self.config,
+            'default': self.default,
+        }
 
     def get_model(self, label_output_sizes):
         optimizer = SGD(momentum=0.9, nesterov=True)
@@ -262,26 +292,12 @@ class DecoderTraining:
         elif self.decoder_model == "stochastic_wrn":
             return decoder_stochastic_wrn(label_output_sizes,
                                           optimizer=optimizer)
+        elif self.decoder_model == "dummy":
+            return decoder_dummy(label_output_sizes, nb_filter=self.nb_units,
+                                 optimizer=optimizer)
         else:
-            raise Exception("Expected resnet or stochastic_wrn for decoder_model. "
+            raise Exception("Expected resnet, stochastic_wrn or dummy for decoder_model. "
                             "Got {}.".format(self.decoder_model))
-
-    def to_config(self):
-        return {
-            'dataset_fnames': self.dataset_fnames,
-            'gt_val_fname': self.gt_val_fname,
-            'gt_test_fname': self.gt_test_fname,
-            'force': self.force,
-            'nb_epoch': self.nb_epoch,
-            'nb_units': self.nb_units,
-            'use_augmentation': self.use_augmentation,
-            'use_noise': self.use_noise,
-            'use_hist_equalization': self.use_hist_equalization,
-            'discriminator_threshold': self.discriminator_threshold,
-            'decoder_model': self.decoder_model,
-            'data_name': self.data_name,
-            'output_dir': self.output_dir,
-        }
 
     def model_fname(self):
         return self.outname("decoder.model")
@@ -289,10 +305,10 @@ class DecoderTraining:
     def save(self):
         fname = self.outname('training_params.json')
         with open(fname, 'w+') as f:
-            json.dump(self.to_config(), f, indent=2)
+            json.dump(self.get_config(), f, indent=2)
 
     def get_label_distributions(self):
-        datasets = [DistributionHDF5Dataset(fname) for fname in self.dataset_fnames]
+        datasets = [DistributionHDF5Dataset(fname) for fname in self.train_sets]
         if self._label_distribution is None:
             for dset in datasets:
                 if self._label_distribution is None:
@@ -311,26 +327,49 @@ class DecoderTraining:
     def outname(self, *args):
         return os.path.join(self.output_dir, *args)
 
+    def augmentation(self):
+        augmentations = []
+        if self.use_warp_augmentation:
+            aug_warp = WarpAugmentation(
+                rotation=(-self.augmentation_rotation, self.augmentation_rotation),
+                scale=self.augmentation_scale,
+                shear=self.augmentation_shear,
+            )
+            augmentations.append(aug_warp)
+        if self.use_channel_scale_shift_augmentation:
+            augmentations.append(
+                ChannelScaleShiftAugmentation(
+                    self.augmentation_channel_scale,
+                    self.augmentation_channel_shift)
+            )
+
+        if self.use_noise_augmentation:
+            aug_noise = NoiseAugmentation(
+                random_std(self.augmentation_noise_mean,
+                           self.augmentation_noise_std))
+            augmentations.append(aug_noise)
+
+        aug_crop = CropAugmentation(0, (64, 64))
+        augmentations.append(aug_crop)
+
+        if self.use_hist_equalization:
+            augmentations.append(HistEqualization())
+        return chain_augmentations(*augmentations)
+
     def summary(self):
+        def print_key(key, pad=20):
+            val = self.config[key]
+            fmt_str = "    {:<" + str(pad) + "}: {}"
+            print(fmt_str.format(key, val))
+
         header = '#' * 30 + " - Decoder Summary - " + '#' * 30
         print(header)
-        print("   Training sets:    {}".format(self.dataset_fnames[0]))
-        for fname in self.dataset_fnames[1:]:
-            print("                     {}".format(fname))
-        print("   GT val data:      {}".format(self.gt_val_fname))
-        print("   GT test data:     {}".format(self.gt_test_fname))
-        print("   dataset name:     {}".format(self.data_name))
-        print("   output dir:       {}".format(self.output_dir))
-        print("   model:            {}".format(self.decoder_model))
-        print("   max epochs:       {}".format(self.nb_epoch))
-        print("   nb units:         {}".format(self.nb_units))
-        print("   use augmentation: {}".format(self.use_augmentation))
-        print("   use noise:        {}".format(self.use_noise))
-        print("   use hist equal.:  {}".format(self.use_hist_equalization))
+        for key in sorted(self.config.keys()):
+            print_key(key)
         print('#' * len(header))
 
     def data_generator_factory(self):
-        datasets = [DistributionHDF5Dataset(fname) for fname in self.dataset_fnames]
+        datasets = [DistributionHDF5Dataset(fname) for fname in self.train_sets]
         dist = None
         for dset in datasets:
             if dist is None:
@@ -341,19 +380,20 @@ class DecoderTraining:
         label_output_sizes = self.get_label_output_sizes()
         all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
             [n for n, _ in label_output_sizes]
-        dataset_names = ['labels', 'discriminator', self.data_name]
+        dataset_names = ['labels', self.data_name]
+        if 'discriminator' in list(dset.keys()):
+            dataset_names.append('discriminator')
         dataset_iterators = [lambda bs: bit_split(dataset_iterator(
-            dset, bs, dataset_names, self.discriminator_threshold))
+            dset, bs, dataset_names, self.discriminator_threshold, self.shuffle_data))
             for dset in datasets]
 
-        preprocess = Preprocessing(self.use_augmentation, self.use_noise,
-                                   self.use_hist_equalization)
+        augmentation = self.augmentation()
 
         def wrapper(bs):
             for batch in zip_dataset_iterators(dataset_iterators, bs):
                 data = batch[self.data_name]
                 labels = [batch[l] for l in all_label_names]
-                yield preprocess(data), labels
+                yield augmentation(data), labels
         return wrapper
 
     def truth_generator_factory(self, h5_truth, missing_label_sizes):
@@ -372,9 +412,9 @@ class DecoderTraining:
         fig.savefig(self.outname("data_histogram_{}.png".format(name)))
         plt.close(fig)
 
-    def run(self):
+    def train(self):
         marker = os.path.basename(self.output_dir)
-        os.makedirs(self.output_dir, exist_ok=self.force)
+        os.makedirs(self.output_dir, exist_ok=True)
         self.save()
         self.summary()
         # save samples
@@ -397,7 +437,7 @@ class DecoderTraining:
         save_samples(gt_data[:, 0], gt_bits,
                      self.outname(marker + "_test_samples.png"))
         # build model
-        bs = 64
+        bs = self.batch_size
         label_output_sizes = self.get_label_output_sizes()
         model = self.get_model(label_output_sizes)
         # setup training
@@ -412,7 +452,6 @@ class DecoderTraining:
                 110: lr / 1000.,
             }
 
-
         scheduler = LearningRateScheduler(
             model.optimizer, lr_schedule(model.optimizer))
         hdf5_attrs = get_distribution_hdf5_attrs(self.get_label_distributions())
@@ -421,18 +460,20 @@ class DecoderTraining:
             self.model_fname(), monitor='val_bits_loss',
             verbose=0, save_best_only=True,
             hdf5_attrs=hdf5_attrs)
-        nb_batches_per_epoch = 1000
         plot_history = hist.plot_callback(
             fname=self.outname(marker + '_loss.png'),
             metrics=['bits_loss', 'val_bits_loss'])
         # train
         truth_gen = self.truth_generator_factory(gt_val, label_output_sizes)
+        callbacks = [CollectBitsLoss(), scheduler, checkpointer, hist,
+                     plot_history, hist_saver]
+        if int(self.verbose) == 0:
+            callbacks.append(DotProgressBar())
         model.fit_generator(
             data_gen(bs),
-            samples_per_epoch=bs*nb_batches_per_epoch, nb_epoch=self.nb_epoch,
-            callbacks=[CollectBitsLoss(), scheduler, checkpointer, hist,
-                       plot_history, hist_saver, DotProgressBar()],
-            verbose=0,
+            samples_per_epoch=bs*self.nb_batches_per_epoch, nb_epoch=self.nb_epoch,
+            callbacks=callbacks,
+            verbose=self.verbose,
             validation_data=truth_gen(bs),
             nb_val_samples=gt_val['tags'].shape[0],
             nb_worker=1, max_q_size=4*10, pickle_safe=False
@@ -440,80 +481,77 @@ class DecoderTraining:
         evaluate_decoder.run(self, cache=False)
 
 
-def get_output_dir(output_dir, model_type, units, augmentation, noise, hist_eq,
-                   dataset_name, marker):
-    name = "decoder_{}_{}_n{}".format(model_type, dataset_name, units)
-    if augmentation:
+def get_output_dir(output_dir, config):
+    def is_set(key):
+        return key in config and config[key]
+
+    name = "decoder_{}_{}_n{}".format(
+        config['decoder_model'], config['data_name'], config['nb_units'])
+    if is_set('use_warp_augmentation'):
         name += "_aug"
-    if noise:
+    if is_set('use_noise_augmentation'):
         name += "_noise"
-    if hist_eq:
+    if is_set('use_hist_equalization'):
         name += "_hist_eq"
-    if marker:
-        name += "_" + marker
-    name += time.strftime("_%Y-%m-%dT%H:%MZ", time.gmtime())
+    if is_set('use_channel_scale_shift_augmentation'):
+        name += "_chncs"
+    if is_set('marker'):
+        name += "_" + config['marker']
+    name += time.strftime("_%Y-%m-%dT%H:%M:%S", time.gmtime())
 
-    return os.path.join(output_dir, name)
+    return os.path.abspath(os.path.join(output_dir, name))
 
 
-def main():
-    def as_abs_path(x):
-        if not os.path.exists(x):
-            raise Exception("Path {} does not exists.".format(x))
-        if not os.path.isabs(x):
-            x = os.path.abspath(x)
-        return x
+@click.command('bb_train_decoder')
+@click.option('--make-json', required=False, type=click.Path(),
+              help='save bb_make file.')
+@click.option('--save-default', required=False, type=click.Path(),
+              help='save bb_make file.')
+@click.option('--gt-test', type=click.Path())
+@click.option('--gt-val', type=click.Path())
+@click.option('--train-sets', type=click.Path(), multiple=True)
+@click.option('--test-set', type=click.Path())
+@click.option('--create-output-dir-in', type=click.Path(resolve_path=True))
+@click.argument('config', required=False, type=click.Path(dir_okay=False, exists=True))
+def main(make_json, save_default, gt_test, gt_val, train_sets, test_set,
+         create_output_dir_in, config):
+    config_fname = config
+    if save_default:
+        with open(save_default, 'w') as f:
+            yaml_str = yaml.dump(DecoderTraining.default(),
+                                 indent=2, default_flow_style=False)
+            print("Default yaml is:")
+            print('-' * 80)
+            print(yaml_str)
+            print('-' * 80)
+            print("Saved to {}".format(save_default))
+            f.write(yaml_str)
+        sys.exit(0)
 
-    parser = argparse.ArgumentParser(
-        description='Train the decoder network')
-    parser.add_argument('-g', '--gt-test', type=as_abs_path,
-                        help='hdf5 files with the test real groud truth data')
-    parser.add_argument('-gv', '--gt-val', type=as_abs_path,
-                        help='hdf5 files with the validation real groud truth data')
-    parser.add_argument('-t', '--train-set', nargs='+', type=as_abs_path,
-                        help='hdf5 files with the artificial train set')
-    parser.add_argument('--test-set', type=as_abs_path,
-                        help='hdf5 files with the artificial test set')
-    parser.add_argument('--units', default=16, type=int,
-                        help='number of units in the decoder.')
-    parser.add_argument('--epoch', default=1000, type=int,
-                        help='number of epoch to train.')
-    parser.add_argument('--model', default='resnet', type=str,
-                        help='decoder model type. either resnet or stochastic_wrn')
-    parser.add_argument('--dataset-name', default='fake', type=str,
-                        help='get the images from this dataset.')
-    parser.add_argument('-a', '--augmentation', action='store_true',
-                        help='use augmentation.')
-    parser.add_argument('-m', '--marker', type=str, default="",
-                        help='marker for the output dir.')
-    parser.add_argument('-n', '--noise', action='store_true',
-                        help='add gaussian noise to the images.')
-    parser.add_argument('--hist-eq', action='store_true',
-                        help='use histogram equalization.')
-    parser.add_argument('--discriminator-threshold', type=float, default=0.05,
-                        help='only use sample over this threshold.')
-    parser.add_argument('--make-json', type=str, default="",
-                        help='save bb_make file.')
-    parser.add_argument('-f', '--force', action='store_true',
-                        help='override existing output files')
-    parser.add_argument('output_dir', type=as_abs_path,
-                        help='directory where to save the model weights')
-    args = parser.parse_args()
-    print(args.train_set)
-    output_dir = get_output_dir(
-        args.output_dir, args.model, args.units, args.augmentation,
-        args.noise, args.hist_eq, args.dataset_name, args.marker)
+    if not config_fname:
+        raise Exception("config argument can only be omitted, if --save-default is given.")
 
-    dt = DecoderTraining(args.train_set, args.gt_val,
-                         args.gt_test,
-                         args.force, args.epoch, args.units,
-                         args.augmentation, args.noise, args.hist_eq,
-                         args.discriminator_threshold, args.dataset_name,
-                         output_dir, decoder_model=args.model)
-    dt.run()
+    with open(config_fname) as f:
+        config = yaml.load(f)
 
-    if args.make_json:
-        with open(args.make_json, 'w') as f:
+    config_options = [("gt_test", "gt_test_fname"),
+                      ("gt_val", "gt_val_fname"),
+                      ("train_sets", "train_sets"),
+                      ("test_set", "test_set")]
+
+    for flag_name, config_name in config_options:
+        value = locals()[flag_name]
+        if value is not None:
+            config[config_name] = value
+
+    if create_output_dir_in:
+        config['output_dir'] = get_output_dir(create_output_dir_in, config)
+
+    dt = DecoderTraining(config)
+
+    dt.train()
+    if make_json:
+        with open(make_json, 'w') as f:
             json.dump({"path": dt.output_dir}, f)
 
 

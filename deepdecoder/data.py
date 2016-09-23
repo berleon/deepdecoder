@@ -205,7 +205,7 @@ class HDF5Dataset(h5py.File):
             if self.nb_samples and self._append_pos >= self.nb_samples:
                 break
 
-    def iter(self, batch_size, names=None):
+    def iter(self, batch_size, names=None, shuffle=False):
         i = 0
         if names is None:
             names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
@@ -215,13 +215,19 @@ class HDF5Dataset(h5py.File):
         else:
             nb_samples = self.nb_samples
 
+        indicies = np.arange(nb_samples)
+        if shuffle:
+            np.random.shuffle(indicies)
+
         while True:
             size = batch_size
             batch = {name: [] for name in names}
             while size > 0:
                 nb = min(nb_samples, i + size) - i
                 for name in names:
-                    batch[name].append(self[name][i:i + nb])
+                    idx = indicies[i:i + nb]
+                    idx = np.sort(idx)
+                    batch[name].append(self[name][idx, :])
                 size -= nb
                 i = (i + nb) % nb_samples
             yield {name: np.concatenate(arrs) for name, arrs in batch.items()}
@@ -276,7 +282,7 @@ class DistributionHDF5Dataset(HDF5Dataset):
             kwargs[label_name] = labels[label_name]
         return super().append(**kwargs)
 
-    def iter(self, batch_size, names=None):
+    def iter(self, batch_size, names=None, shuffle=False):
         label_names = self.get_label_names()
         dist = self.get_tag_distribution()
         if names is None:
@@ -294,7 +300,7 @@ class DistributionHDF5Dataset(HDF5Dataset):
                 "Got name some label names {}. But not all {}."
                 .format(', '.join([n for n in names if n in dist.names]), dist.names))
 
-        for batch in super().iter(batch_size, names):
+        for batch in super().iter(batch_size, names, shuffle):
             if uses_labels:
                 labels = [(name, batch.pop(name)) for name in label_names]
                 batch['labels'] = np.zeros(len(labels[0][1]), dtype=dist.norm_dtype)

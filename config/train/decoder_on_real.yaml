@@ -1,18 +1,19 @@
 # marks the decoder path
-# marker: "m"
+marker: "on_real"
+
+
 
 # decoder model type. either resnet or stochastic_wrn
-# decoder_model: stochastic_wrn
 decoder_model: resnet
 
-augmentation_channel_scale: [0.7, 1.2]
-augmentation_channel_shift: [-0.4, 0.4]
-augmentation_noise_mean: 0.07
-augmentation_noise_std: 0.06
-augmentation_rotation: 0.1
-augmentation_scale: [0.8, 1.1]
+augmentation_channel_scale: [0.8, 1.2]
+augmentation_channel_shift: [-0.3, 0.3]
+augmentation_noise_mean: 0.04
+augmentation_noise_std: 0.02
+augmentation_rotation: 3.141
+augmentation_scale: [0.7, 1.1]
 augmentation_shear: [-0.3, 0.3]
-data_name: fake
+data_name: tags
 
 # only use sample with a discriminator score greater then this threshold
 discriminator_threshold: 0.02
@@ -23,4 +24,6 @@ use_channel_scale_shift_augmentation: true
 use_hist_equalization: false
 use_noise_augmentation: true
 use_warp_augmentation: true
-batch_size: 128
+
+shuffle_data: true
+verbose: 1

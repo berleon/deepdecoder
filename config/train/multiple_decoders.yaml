@@ -1,0 +1,4 @@
+data_name: "fake"
+n_jobs: 3
+n_trails: 10
+

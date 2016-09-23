@@ -13,87 +13,110 @@
 # limitations under the License.
 
 import os
-import signal
-import traceback
+os.environ['THEANO_FLAGS'] = 'device=cpu'  # noqa
+
+import os
 from subprocess import Popen, TimeoutExpired, DEVNULL
-import json
 
 import click
+import random
+import json
+from pprint import pprint
+
+import numpy as np
+
+from diktya.random_search import fmin
+
+from deepdecoder.scripts.train_decoder import get_output_dir
+
+
+def rand_bool():
+    return random.randint(0, 1) == 0
+
+
+def random_aug_space(cl_args, base_output_dir, data_name):
+    def wrapper(i):
+        scale = random.uniform(0., 0.3)
+        shear = random.uniform(0., 0.3)
+        rotation = random.uniform(0., 0.2 * np.pi)
+        channel_scale = random.uniform(0., 0.3)
+        channel_shift = random.uniform(0., 0.3)
+        noise_mean = random.uniform(0., 0.10)
+        noise_std = random.uniform(0., 0.07)
+        return {
+            'decoder_model': 'resnet',
+            'nb_batches_per_epoch': 1000,
+            'data_name': data_name,
+            'marker': "iter{}".format(i),
+            'nb_epoch': 120,
+            'nb_units': random.choice([16, 32]),
+            'use_hist_equalization': rand_bool(),
+            'use_warp_augmentation': rand_bool(),
+            'use_noise_augmentation': rand_bool(),
+            'use_channel_scale_shift_augmentation': rand_bool(),
+            'augmentation_rotation': rotation,
+            'augmentation_scale': (1 - scale, 1 + scale),
+            'augmentation_shear': (-shear, shear),
+            'augmentation_channel_scale': (1 - channel_scale, 1 + channel_scale),
+            'augmentation_channel_shift': (-channel_shift, channel_shift),
+            'augmentation_noise_mean': noise_mean,
+            'augmentation_noise_std': noise_std,
+        }, base_output_dir, cl_args
+    return wrapper
+
+
+def process_env():
+    gpu_env = os.environ.copy()
+    del gpu_env['THEANO_FLAGS']
+    return gpu_env
+
+
+def train_decoder(input):
+    config, base_output_dir, cl_args = input
+    output_dir = get_output_dir(base_output_dir, config)
+    config['output_dir'] = output_dir
+    os.makedirs(output_dir)
+    config_fname = os.path.join(config['output_dir'], "decoder_config.json")
+    with open(config_fname, 'w') as f:
+        json.dump(config, f, indent=2)
+
+    cmd = ['bb_train_decoder'] + cl_args + [config_fname]
+    stdout_fname = os.path.join(output_dir, "stdout.log")
+    print("\\\n    ".format(cmd))
+    with open(stdout_fname, 'wb+') as stdout_log:
+        process = Popen(cmd, env=process_env(), stdin=DEVNULL, stdout=stdout_log)
+        process.wait()
+
+    with open(os.path.join(output_dir, 'results.json')) as f:
+        results = json.load(f)
+        return float(results['mhd'])
 
 
 @click.command()
-@click.option('--gt', '-g', type=click.Path(exists=True))
+@click.option('--gt-test', type=click.Path(exists=True))
+@click.option('--gt-val', type=click.Path(exists=True))
 @click.option('--train-set', '-t', type=click.Path(exists=True))
 @click.option('--test-set', type=click.Path(exists=True))
-@click.option('--units', type=int)
-@click.option('--model', default='resnet', type=str)
-@click.option('--dataset-names', type=str)
-@click.option('--force', is_flag=True)
-@click.option('--max-processes', default=2, type=int)
+@click.option('--data-name', type=str)
+@click.option('--n-jobs', default=2, type=int)
+@click.option('--n-trails', default=15, type=int)
 @click.argument('output_dir', type=click.Path(resolve_path=True))
-def main(gt, train_set, test_set, units, model, dataset_names,
-         force, output_dir, max_processes):
-    os.makedirs(output_dir, exist_ok=force)
-    dataset_names = dataset_names.replace(' ', '').split(',')
-    augmentations = [
-        '',
-        '--augmentation',
-        '--augmentation --hist-eq',
-        '--noise',
-        '--augmentation --noise --hist-eq',
-        '--hist-eq',
-        '--noise --hist-eq',
+def main(gt_test, gt_val, train_set, test_set, data_name,
+         output_dir, n_jobs, n_trails):
+    os.makedirs(output_dir, exist_ok=False)
+    cl_args = [
+        '--gt-test', gt_test,
+        '--gt-val', gt_val,
+        '--train-sets', train_set,
+        '--test-set', test_set,
     ]
-    processes = []
-    os.setpgrp()
-    try:
-        process_id = 1
-        for dataset_name in dataset_names:
-            for augmentation in augmentations:
-                try:
-                    prefix = "decoder_{}_{}".format(
-                        dataset_name,
-                        augmentation.replace('--', '').replace(' ', '_').replace('-', '_')
-                    )
-                    stdout_fname = os.path.join(output_dir, prefix + "_stdout.log")
-                    stdout_log = open(stdout_fname, 'wb+')
-                    cmd = [
-                        'bb_train_decoder',
-                        '--gt', gt,
-                        '--train-set', train_set,
-                        '--test-set', test_set,
-                        '--units', units,
-                        '--model', model,
-                        '--dataset-name', dataset_name,
-                        '--epoch', 1000,
-                    ]
-                    if augmentation != '':
-                        cmd.extend(augmentation.split(' '))
-                    cmd.append(output_dir)
-                    cmd = list(map(str, cmd))
-                    total_process = len(dataset_names) * len(augmentations)
-                    print("Run {}/{}: ".format(process_id, total_process) +
-                          " ".join(cmd).replace('--', '\n    --'))
-                    processes.append(Popen(cmd, stdin=DEVNULL, stdout=stdout_log))
-                    process_id += 1
+    results = fmin(train_decoder,
+                   random_aug_space(cl_args, output_dir, data_name),
+                   n=n_trails, n_jobs=n_jobs)
+    mhd, (config, base_output_dir, _) = results[0]
+    print("Min MHD: {}".format(mhd))
+    print("with config:")
+    pprint(config)
 
-                    while len(processes) >= max_processes:
-                        for i in range(len(processes)):
-                            try:
-                                p = processes[i]
-                                p.wait(1)
-                                del processes[i]
-                                break
-                            except TimeoutExpired:
-                                pass
-                except KeyboardInterrupt:
-                    return
-                except Exception as err:
-                    traceback.print_tb(err.__traceback__)
-                    print(err)
-        for i in range(len(processes)):
-            processes[i].wait()
-        processes = []
-    finally:
-        if len(processes) > 0:
-            os.killpg(0, signal.SIGKILL)
+    with open(os.path.join(output_dir, "results.json"), 'w') as f:
+        json.dump(results, f)

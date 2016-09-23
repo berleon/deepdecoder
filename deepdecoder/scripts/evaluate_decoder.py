@@ -26,6 +26,8 @@ import time
 from progressbar import ProgressBar
 from pipeline.stages.processing import Decoder
 from deepdecoder.data import DistributionHDF5Dataset
+from deepdecoder.networks import ScaleInTestPhase, RandomSwitch
+import click
 
 
 def mse(x, y):
@@ -47,11 +49,14 @@ def mean_hamming_distance(y_true, y_pred):
     return (np.sum(hd) - nb_intermediate) / len(hd)
 
 
-def get_predictions(tp: 'DecoderTraining', cache: bool):
+def get_predictions(tp: 'DecoderTraining', cache: bool, data_set=None):
     def _calculate_predictions():
         print("Loading GT data: {}".format(tp.gt_test_fname))
-        h5_truth = h5py.File(tp.gt_test_fname)
-        decoder = Decoder(tp.model_fname())
+        h5_truth = h5py.File(data_set or tp.gt_test_fname)
+        decoder = Decoder(tp.model_fname(), {
+            'ScaleInTestPhase': ScaleInTestPhase,
+            'RandomSwitch': RandomSwitch,
+        })
         print("Loaded decoder. Got model with {:.2f} million parameters."
               .format(decoder.model.count_params() / 1e6))
         dist = decoder.distribution
@@ -132,8 +137,8 @@ def print_results(results):
     print("Time per sample: {:5f}ms".format(results['time_per_sample']*1e3))
 
 
-def run(tp: 'DecoderTraining', cache: bool):
-    bits_true, bits_pred_probs, time_per_sample = get_predictions(tp, cache)
+def run(tp: 'DecoderTraining', cache: bool, data_set=None):
+    bits_true, bits_pred_probs, time_per_sample = get_predictions(tp, cache, data_set)
     results = {
         'time_per_sample': time_per_sample,
         'bits_true': bits_true.tolist(),
@@ -146,28 +151,19 @@ def run(tp: 'DecoderTraining', cache: bool):
         json.dump(results, f)
 
 
-def main():
+@click.command("bb_evaluate_decoder")
+@click.option("--cache", is_flag=True, help='use cache for predictions')
+@click.option("--data-set", required=False,
+              type=click.Path(dir_okay=False, exists=True, resolve_path=True),
+              help='use cache for predictions')
+@click.argument('dir', type=click.Path(file_okay=False, exists=True, resolve_path=True))
+def main(cache, data_set, dir):
     from deepdecoder.scripts.train_decoder import DecoderTraining
 
-    def as_abs_path(x):
-        if not os.path.exists(x):
-            raise Exception("Path {} does not exists.".format(x))
-        if not os.path.isabs(x):
-            x = os.path.abspath(x)
-        return x
-
-    parser = argparse.ArgumentParser(
-        description='Evaluate the decoder network')
-
-    parser.add_argument('--cache', action='store_true',
-                        help='recompute the predictions')
-    parser.add_argument('dir', type=as_abs_path,
-                        help='directory where the decoder is stored')
-    args = parser.parse_args()
-    with open(os.path.join(args.dir, 'training_params.json')) as f:
+    with open(os.path.join(dir, 'training_params.json')) as f:
         config = json.load(f)
     dt = DecoderTraining(**config)
-    run(dt, args.cache)
+    run(dt, cache, data_set)
 
 if __name__ == "__main__":
     main()

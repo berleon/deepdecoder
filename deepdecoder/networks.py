@@ -621,6 +621,20 @@ def decoder_resnet(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12
     return model
 
 
+def decoder_dummy(label_sizes, nb_filter=16, data_shape=(1, 64, 64), nb_bits=12,
+                  optimizer='adam'):
+
+    input = Input(shape=data_shape)
+    x = input
+    outputs, losses = decoder_end_block(x, label_sizes, nb_bits,
+                                        activation=lambda: ELU())
+
+    model = Model(input, list(outputs.values()))
+    model.compile(optimizer, loss=list(losses.values()),
+                  loss_weights={k: decoder_loss_weights(k) for k in losses.keys()})
+    return model
+
+
 class ScaleInTestPhase(Layer):
     def __init__(self, death_rate, **kwargs):
         self.death_rate = K.variable(death_rate)

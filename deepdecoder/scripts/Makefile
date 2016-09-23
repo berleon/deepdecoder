@@ -96,30 +96,26 @@ decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt
 	bb_train_decoder \
 		--gt-val $(call setting,gt_val,gt.yaml) \
 		--gt-test $(call setting,gt_test,gt.yaml) \
-		--train-set $(call get,train_set,artificial_data_set) \
+		--train-sets $(call get,train_set,artificial_data_set) \
 		--test-set $(call get,test_set,artificial_data_set) \
-		--units $(call setting,units,decoder.yaml) \
-		--epoch 120 \
-		--marker $(call setting,marker,decoder.yaml) \
-		--model $(call setting,model,decoder.yaml) \
-		--discriminator-threshold $(call setting,discriminator_threshold,decoder.yaml) \
+		--create-output-dir-in $(models)/decoder \
 		--make-json decoder \
-		$(call setting,augmentations,decoder.yaml)   \
-		$(models)/decoder
+		$(setting_dir)/decoder.yaml \
 
 decoder_evaluation:
 	bb_evaluate_decoder  $(call get,path,decoder)
 
 decoder: decoder_model decoder_evaluation
 
+multiple_decoder_data_name = $(call setting,data_name,multiple_decoders.yaml)
 multiple_decoders: artificial_data_set $(setting_dir)/multiple_decoders.yaml $(setting_dir)/gt.yaml
 	bb_train_multiple_decoders  \
-		--force  \
-		--gt $(call setting,ground_truth,gt.yaml) \
+		--gt-val $(call setting,gt_val,gt.yaml) \
+		--gt-test $(call setting,gt_test,gt.yaml) \
 		--train-set $(call get,train_set,artificial_data_set) \
 		--test-set $(call get,test_set,artificial_data_set) \
-		--units $(call setting,units,multiple_decoders.yaml) \
-		--model $(call setting,model,multiple_decoders.yaml) \
-		--dataset-names "$(call setting,dataset_names,multiple_decoders.yaml)" \
-		$(models)/multi_decoders
+		--n-jobs $(call setting,n_jobs,multiple_decoders.yaml) \
+		--n-trails $(call setting,n_trails,multiple_decoders.yaml) \
+		--data-name "$(multiple_decoder_data_name)" \
+		$(models)/multi_decoders/$(multiple_decoder_data_name)/
 
