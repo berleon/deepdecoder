@@ -17,7 +17,8 @@ import matplotlib
 matplotlib.use('Agg')  # noqa
 
 import matplotlib.pyplot as plt
-from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn, decoder_dummy
+from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn, decoder_dummy, \
+    decoder_baseline
 from deepdecoder.data import DistributionHDF5Dataset, get_distribution_hdf5_attrs
 import os
 import numpy as np
@@ -54,7 +55,8 @@ def filter_by_discriminator_score(batch, threshold):
     return batch
 
 
-def dataset_iterator(dataset, batch_size, names=None, d_threshold=0.05, shuffle=False):
+def dataset_iterator(dataset, batch_size, names=None,
+                     d_threshold=0.05, shuffle=False):
     def len_batch(b):
         return len(next(iter(b.values())))
 
@@ -136,9 +138,11 @@ def bit_split(generator):
 
 
 def truth_generator(h5_truth, batch_size,
-                    missing_label_sizes):
-    truth_tags = h5_truth['tags']
+                    missing_label_sizes, tags_name='tags'):
+    print("tags_name", tags_name)
+    truth_tags = h5_truth[tags_name]
     truth_bits = h5_truth['bits']
+
     nb_bits = truth_bits.shape[-1]
     idx = 0
     crop = CropAugmentation(0, (64, 64))
@@ -146,7 +150,6 @@ def truth_generator(h5_truth, batch_size,
         if idx + batch_size > truth_tags.shape[0]:
             idx = 0
         tags = crop(truth_tags[idx:idx+batch_size])
-
         labels = [truth_bits[idx:idx+batch_size][:, i] for i in range(nb_bits)]
         missing_labels = [np.zeros((batch_size, size), dtype=np.float32)
                           for _, size in missing_label_sizes]
@@ -239,6 +242,7 @@ class DecoderTraining:
             'batch_size': 128,
             'use_hist_equalization': False,
             'use_warp_augmentation': False,
+            'use_diffeomorphism_augmentation': False,
             'use_noise_augmentation': False,
             'use_channel_scale_shift_augmentation': False,
             'augmentation_rotation': 0.1 * np.pi,
@@ -248,6 +252,7 @@ class DecoderTraining:
             'augmentation_channel_shift': (-0.5, 0.5),
             'augmentation_noise_mean': 0.07,
             'augmentation_noise_std': 0.05,
+            'augmentation_diffeomorphism': [(4, 0.3), (8, 0.7), (16, 0.5), (32, 0.5)],
             'discriminator_threshold': 0.02,
             'decoder_model': 'resnet',
             'data_name': None,
@@ -295,8 +300,11 @@ class DecoderTraining:
         elif self.decoder_model == "dummy":
             return decoder_dummy(label_output_sizes, nb_filter=self.nb_units,
                                  optimizer=optimizer)
+        elif self.decoder_model == "baseline":
+            return decoder_baseline(label_output_sizes, nb_filter=self.nb_units,
+                                    optimizer=optimizer)
         else:
-            raise Exception("Expected resnet, stochastic_wrn or dummy for decoder_model. "
+            raise Exception("Expected resnet, stochastic_wrn, baseline or dummy for decoder_model. "
                             "Got {}.".format(self.decoder_model))
 
     def model_fname(self):
@@ -329,13 +337,27 @@ class DecoderTraining:
 
     def augmentation(self):
         augmentations = []
-        if self.use_warp_augmentation:
+        if self.use_warp_augmentation and self.use_diffeomorphism_augmentation:
+            aug_warp = WarpAugmentation(
+                rotation=(-self.augmentation_rotation, self.augmentation_rotation),
+                scale=self.augmentation_scale,
+                shear=self.augmentation_shear,
+                diffeomorphism=self.augmentation_diffeomorphism,
+            )
+            augmentations.append(aug_warp)
+        elif not self.use_diffeomorphism_augmentation and self.use_warp_augmentation:
             aug_warp = WarpAugmentation(
                 rotation=(-self.augmentation_rotation, self.augmentation_rotation),
                 scale=self.augmentation_scale,
                 shear=self.augmentation_shear,
             )
             augmentations.append(aug_warp)
+        elif self.use_diffeomorphism_augmentation and not self.use_warp_augmentation:
+            aug_warp = WarpAugmentation(
+                diffeomorphism=self.augmentation_diffeomorphism
+            )
+            augmentations.append(aug_warp)
+
         if self.use_channel_scale_shift_augmentation:
             augmentations.append(
                 ChannelScaleShiftAugmentation(
@@ -396,9 +418,9 @@ class DecoderTraining:
                 yield augmentation(data), labels
         return wrapper
 
-    def truth_generator_factory(self, h5_truth, missing_label_sizes):
+    def truth_generator_factory(self, h5_truth, missing_label_sizes, tags_name='tags'):
         def wrapper(bs):
-            gen = truth_generator(h5_truth, bs, missing_label_sizes)
+            gen = truth_generator(h5_truth, bs, missing_label_sizes, tags_name)
             if self.use_hist_equalization:
                 return hist_equalisation(gen)
             else:
@@ -447,9 +469,7 @@ class DecoderTraining:
         def lr_schedule(optimizer):
             lr = K.get_value(optimizer.lr)
             return {
-                80: lr / 10.,
-                100: lr / 100.,
-                110: lr / 1000.,
+                40: lr / 10.,
             }
 
         scheduler = LearningRateScheduler(
@@ -493,6 +513,9 @@ def get_output_dir(output_dir, config):
         name += "_noise"
     if is_set('use_hist_equalization'):
         name += "_hist_eq"
+
+    if is_set('use_diffeomorphism_augmentation'):
+        name += "_diff"
     if is_set('use_channel_scale_shift_augmentation'):
         name += "_chncs"
     if is_set('marker'):

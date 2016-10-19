@@ -216,7 +216,7 @@ class RenderGAN:
         blur_factor = get_blur_factor(out_offset_middle, min=0.25, max=1.)
         outputs['blur_factor'] = blur_factor
 
-        tag3d_blur = BlendingBlur(sigma=3.0)([tag3d, blur_factor])
+        tag3d_blur = BlendingBlur(sigma=2.0)([tag3d, blur_factor])
         outputs['tag3d_blur'] = tag3d_blur
         outputs['light_black'] = light_outs[0]
         outputs['light_white'] = light_outs[1]
@@ -493,15 +493,15 @@ def train_callbacks(rendergan, output_dir, nb_visualise, real_hdf5_fname,
     return [sample_cb, save_gan_cb, hist, hist_save] + lr_schedulers
 
 
-def train_data_generator(real_hdf5_fname, batch_size, z_dim):
+def train_data_generator(real_hdf5_fname, batch_size, z_dim, translation=2):
     for data in real_generator(real_hdf5_fname, batch_size, range=(-1, 1)):
         z = np.random.uniform(-1, 1, (3*batch_size, z_dim)).astype(np.float32)
         size = 64
         if data.shape[-2:] != (size, size):
             translated_data = []
             for sample in data:
-                translation = np.random.choice(np.arange(-5, 6))
-                offset = (data.shape[-1] - size) // 2 + translation
+                random_translation = np.random.choice(np.arange(-translation, translation+1))
+                offset = (data.shape[-1] - size) // 2 + random_translation
                 crop = slice(offset, size+offset)
                 translated_data.append(sample[:, crop, crop])
             data = np.stack(translated_data)

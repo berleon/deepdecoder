@@ -111,14 +111,9 @@ def generated_3d_tags(tag_distribution, batch_size=128, artist=None, scale=1.):
 class HDF5Dataset(h5py.File):
     def __init__(self, name, nb_samples=None, chunks=None, **kwargs):
         super().__init__(name, **kwargs)
-        self.dataset_created = '__dataset_created' in self.attrs
-        if nb_samples is None:
+        if nb_samples is not None:
             if '__nb_samples' in self.attrs:
-                self.nb_samples = self.attrs['__nb_samples']
-            else:
-                self.nb_samples = None
-        else:
-            self.nb_samples = nb_samples
+                raise Exception("Got nb_samples, but nb_samples allready set for dataset.")
             self.attrs['__nb_samples'] = nb_samples
 
         if nb_samples is None and chunks is None:
@@ -126,20 +121,38 @@ class HDF5Dataset(h5py.File):
         self.chunks = chunks
         self._append_pos = None
 
+    @property
+    def nb_samples(self):
+        if '__nb_samples' in self.attrs:
+            return int(self.attrs['__nb_samples'])
+        else:
+            return None
+
     @staticmethod
     def _nearest_power_of_two(x):
         return int(2**np.round(np.log(x) / np.log(2)))
 
+    @property
     def dataset_names(self):
-        if not self.dataset_created:
-            raise Exception("No Datasets  created.")
+        if not self._dataset_created:
+            raise Exception("No Datasets created.")
         if not hasattr(self, '_dataset_names'):
             self._dataset_names = [n.decode('utf-8')
                                    for n in self.attrs['dataset_names']]
         return self._dataset_names
 
+    @property
+    def _dataset_created(self):
+        if '__dataset_created' in self.attrs:
+            return bool(self.attrs['__dataset_created'])
+        return False
+
+    @_dataset_created.setter
+    def _dataset_created(self, x):
+        self.attrs['__dataset_created'] = x
+
     def _create_dataset(self, **kwargs):
-        if self.dataset_created:
+        if self._dataset_created:
             raise Exception("Datasets allready created.")
 
         self.attrs['dataset_names'] = [k.encode('utf-8') for k in kwargs.keys()]
@@ -156,11 +169,11 @@ class HDF5Dataset(h5py.File):
                                     maxshape=(None,) + shape,
                                     dtype=str(array.dtype))
 
-        self.dataset_created = True
+        self._dataset_created = True
         self._append_pos = 0
 
     def _ensure_enough_space_for(self, size):
-        for name in self.dataset_names():
+        for name in self.dataset_names:
             if len(self[name]) < size:
                 self[name].resize(size, axis=0)
 
@@ -173,7 +186,7 @@ class HDF5Dataset(h5py.File):
             **kwargs: Dictonary of name to numpy array.
         """
 
-        if not self.dataset_created:
+        if not self._dataset_created:
             self._create_dataset(**kwargs)
         if self.nb_samples and self._append_pos >= self.nb_samples:
             raise Exception("Dataset is allready full!")
@@ -208,7 +221,7 @@ class HDF5Dataset(h5py.File):
     def iter(self, batch_size, names=None, shuffle=False):
         i = 0
         if names is None:
-            names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
+            names = self.dataset_names
 
         if self.nb_samples is None:
             nb_samples = len(self[names[0]])
@@ -224,10 +237,18 @@ class HDF5Dataset(h5py.File):
             batch = {name: [] for name in names}
             while size > 0:
                 nb = min(nb_samples, i + size) - i
+                idx = indicies[i:i + nb]
+                idx = np.sort(idx)
+                if shuffle:
+                    shuffle_idx = np.arange(nb)
+                    np.random.shuffle(shuffle_idx)
+
                 for name in names:
-                    idx = indicies[i:i + nb]
-                    idx = np.sort(idx)
-                    batch[name].append(self[name][idx, :])
+                    arr = self[name][idx.tolist()]
+                    if shuffle:
+                        arr = arr[shuffle_idx.tolist()]
+                    batch[name].append(arr)
+
                 size -= nb
                 i = (i + nb) % nb_samples
             yield {name: np.concatenate(arrs) for name, arrs in batch.items()}
@@ -286,7 +307,7 @@ class DistributionHDF5Dataset(HDF5Dataset):
         label_names = self.get_label_names()
         dist = self.get_tag_distribution()
         if names is None:
-            names = [n.decode('utf-8') for n in self.attrs['dataset_names']]
+            names = self.dataset_names
         if 'labels' in names:
             del names[names.index('labels')]
             names += dist.names

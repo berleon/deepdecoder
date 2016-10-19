@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
+import matplotlib
+matplotlib.use('Agg')  # noqa
+
 import os
 import numpy as np
 from diktya.func_api_helpers import load_model, get_hdf5_attr, predict_wrapper
@@ -49,10 +51,16 @@ def mean_hamming_distance(y_true, y_pred):
     return (np.sum(hd) - nb_intermediate) / len(hd)
 
 
-def get_predictions(tp: 'DecoderTraining', cache: bool, data_set=None):
+def get_marker(data_set):
+    return os.path.splitext(os.path.basename(data_set))[0]
+
+
+def get_predictions(tp: 'DecoderTraining', cache: bool, data_set, tags_name='tags'):
     def _calculate_predictions():
-        print("Loading GT data: {}".format(tp.gt_test_fname))
-        h5_truth = h5py.File(data_set or tp.gt_test_fname)
+        from deepdecoder.scripts.train_decoder import save_samples
+        name = get_marker(data_set)
+        print("Loading GT data: {}".format(data_set))
+        h5_truth = h5py.File(data_set)
         decoder = Decoder(tp.model_fname(), {
             'ScaleInTestPhase': ScaleInTestPhase,
             'RandomSwitch': RandomSwitch,
@@ -64,30 +72,42 @@ def get_predictions(tp: 'DecoderTraining', cache: bool, data_set=None):
         fill_zeros = [(n, s) for (n, s) in dist.norm_nb_elems.items()
                       if n != 'bits']
 
-        batch_size = 32
-        gen = tp.truth_generator_factory(h5_truth, fill_zeros)(batch_size)
+        batch_size = 128
+        gen_factory = tp.truth_generator_factory(h5_truth, fill_zeros, tags_name)
+        tp.check_generator(gen_factory(400), os.path.basename(data_set))
+        tags, bits = next(gen_factory(20**2))
+
+        nb_bits = 12
+        bits = np.array(bits[:12]).T
+        normalize_bits = bits.min() == -1
+        print(bits.min())
+        print(bits.max())
+        save_samples(tags[:, 0], bits,
+                     tp.outname("evaluate_{}.png".format(name)))
+        gen = gen_factory(batch_size)
         bits_true = []
         bits_pred = []
-        nb_bits = 12
         total_time = 0
         nb_samples = 0
-        total_samples = len(h5_truth['tags'])
+        total_samples = min(len(h5_truth[tags_name]), 100000)
 
-        h5_fname = tp.outname("gt_predictions.hdf5")
+        h5_fname = tp.outname("gt_prediction_{}.hdf5".format(name))
         if os.path.exists(h5_fname):
             os.remove(h5_fname)
-        dset = DistributionHDF5Dataset(
+        dset_output = DistributionHDF5Dataset(
             h5_fname, decoder.distribution, nb_samples=total_samples)
         with ProgressBar(max_value=total_samples) as pbar:
             for tags, gt in gen:
                 if nb_samples + len(tags) > total_samples:
                     break
                 nb_samples += len(tags)
-                bits_true.append(np.array(gt[:nb_bits]).T)
-
+                bits = np.array(gt[:nb_bits]).T
+                if normalize_bits:
+                    bits = bits / 2. + 0.5
+                bits_true.append(bits)
                 start = time.time()
                 outputs = decoder.predict(tags)
-                dset.append(outputs, tag=tags)
+                dset_output.append(outputs, tag=tags)
                 total_time += time.time() - start
                 bits_pred.append(outputs['bits'] / 2. + 0.5)
                 pbar.update(nb_samples)
@@ -137,8 +157,9 @@ def print_results(results):
     print("Time per sample: {:5f}ms".format(results['time_per_sample']*1e3))
 
 
-def run(tp: 'DecoderTraining', cache: bool, data_set=None):
-    bits_true, bits_pred_probs, time_per_sample = get_predictions(tp, cache, data_set)
+def run(tp: 'DecoderTraining', cache: bool, data_set=None, tags_name='tags'):
+    data_set = data_set or tp.gt_test_fname
+    bits_true, bits_pred_probs, time_per_sample = get_predictions(tp, cache, data_set, tags_name)
     results = {
         'time_per_sample': time_per_sample,
         'bits_true': bits_true.tolist(),
@@ -147,7 +168,7 @@ def run(tp: 'DecoderTraining', cache: bool, data_set=None):
         'confidence': get_confidence(bits_true, bits_pred_probs)
     }
     print_results(results)
-    with open(tp.outname("results.json"), 'w') as f:
+    with open(tp.outname("results_{}.json".format(get_marker(data_set))), 'w') as f:
         json.dump(results, f)
 
 
@@ -156,14 +177,17 @@ def run(tp: 'DecoderTraining', cache: bool, data_set=None):
 @click.option("--data-set", required=False,
               type=click.Path(dir_okay=False, exists=True, resolve_path=True),
               help='use cache for predictions')
+@click.option("--tags-name", required=False, default='tags',
+              type=str, help='name of the tags in the dataset')
 @click.argument('dir', type=click.Path(file_okay=False, exists=True, resolve_path=True))
-def main(cache, data_set, dir):
+def main(cache, data_set, tags_name, dir):
     from deepdecoder.scripts.train_decoder import DecoderTraining
 
     with open(os.path.join(dir, 'training_params.json')) as f:
         config = json.load(f)
     dt = DecoderTraining(**config)
-    run(dt, cache, data_set)
+    print(tags_name)
+    run(dt, cache, data_set, tags_name)
 
 if __name__ == "__main__":
     main()

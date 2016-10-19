@@ -103,9 +103,23 @@ decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt
 		$(setting_dir)/decoder.yaml \
 
 decoder_evaluation:
-	bb_evaluate_decoder  $(call get,path,decoder)
+	bb_evaluate_decoder $(call get,path,decoder)
 
 decoder: decoder_model decoder_evaluation
+
+decoder_on_real: $(setting_dir)/decoder_on_real.yaml $(setting_dir)/gt.yaml
+	$(ensure_out_dirs_exists)
+	mkdir -p $(models)/decoder_on_real
+	bb_train_decoder \
+		--gt-val $(call setting,gt_train_val,gt.yaml) \
+		--gt-test $(call setting,gt_train_test,gt.yaml) \
+		--train-sets $(call setting,gt_train,gt.yaml) \
+		--test-set $(call setting,gt_train,gt.yaml) \
+		--create-output-dir-in $(models)/decoder_on_real \
+		--make-json decoder_on_real \
+		$(setting_dir)/decoder_on_real.yaml \
+
+
 
 multiple_decoder_data_name = $(call setting,data_name,multiple_decoders.yaml)
 multiple_decoders: artificial_data_set $(setting_dir)/multiple_decoders.yaml $(setting_dir)/gt.yaml

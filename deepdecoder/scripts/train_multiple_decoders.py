@@ -20,6 +20,7 @@ from subprocess import Popen, TimeoutExpired, DEVNULL
 
 import click
 import random
+from random import uniform
 import json
 from pprint import pprint
 
@@ -36,23 +37,24 @@ def rand_bool():
 
 def random_aug_space(cl_args, base_output_dir, data_name):
     def wrapper(i):
-        scale = random.uniform(0., 0.3)
-        shear = random.uniform(0., 0.3)
-        rotation = random.uniform(0., 0.2 * np.pi)
-        channel_scale = random.uniform(0., 0.3)
-        channel_shift = random.uniform(0., 0.3)
-        noise_mean = random.uniform(0., 0.10)
-        noise_std = random.uniform(0., 0.07)
+        scale = uniform(0., 0.3)
+        shear = uniform(0., 0.3)
+        rotation = uniform(0., 0.2 * np.pi)
+        channel_scale = uniform(0., 0.3)
+        channel_shift = uniform(0., 0.3)
+        noise_mean = uniform(0., 0.10)
+        noise_std = uniform(0., 0.07)
         return {
             'decoder_model': 'resnet',
             'nb_batches_per_epoch': 1000,
             'data_name': data_name,
             'marker': "iter{}".format(i),
-            'nb_epoch': 120,
+            'nb_epoch': 50,
             'nb_units': random.choice([16, 32]),
             'use_hist_equalization': rand_bool(),
             'use_warp_augmentation': rand_bool(),
             'use_noise_augmentation': rand_bool(),
+            'use_diffeomorphism_augmentation': rand_bool(),
             'use_channel_scale_shift_augmentation': rand_bool(),
             'augmentation_rotation': rotation,
             'augmentation_scale': (1 - scale, 1 + scale),
@@ -61,6 +63,10 @@ def random_aug_space(cl_args, base_output_dir, data_name):
             'augmentation_channel_shift': (-channel_shift, channel_shift),
             'augmentation_noise_mean': noise_mean,
             'augmentation_noise_std': noise_std,
+            'augmentation_diffeomorphism': [(4, 0.3),
+                                            (8, uniform(0.3, 0.7)),
+                                            (16, uniform(0.3, 0.7)),
+                                            (32, uniform(0.3, 0.7))],
         }, base_output_dir, cl_args
     return wrapper
 

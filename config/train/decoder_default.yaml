@@ -1,0 +1,17 @@
+augmentation_channel_scale: [0.8, 1.5]
+augmentation_channel_shift: [-0.5, 0.5]
+augmentation_noise_mean: 0.07
+augmentation_noise_std: 0.05
+augmentation_rotation: 0.3141592653589793
+augmentation_scale: [0.8, 1.2]
+augmentation_shear: [-0.2, 0.2]
+data_name: fake
+decoder_model: resnet
+discriminator_threshold: 0.02
+force: false
+nb_epoch: 120
+nb_units: 16
+use_channel_scale_shift_augmentation: true
+use_hist_equalization: true
+use_noise_augmenation: true
+use_warp_augmentation: true

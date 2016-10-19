@@ -16,11 +16,10 @@ data_name: fake
 
 # only use sample with a discriminator score greater then this threshold
 discriminator_threshold: 0.02
-force: false
-nb_epoch: 120
+nb_epoch: 80
 nb_units: 16
-use_channel_scale_shift_augmentation: true
+use_channel_scale_shift_augmentation: false
 use_hist_equalization: false
-use_noise_augmentation: true
-use_warp_augmentation: true
+use_noise_augmentation: false
+use_warp_augmentation: false
 batch_size: 128

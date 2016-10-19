@@ -6,10 +6,10 @@ marker: "on_real"
 # decoder model type. either resnet or stochastic_wrn
 decoder_model: resnet
 
-augmentation_channel_scale: [0.8, 1.2]
-augmentation_channel_shift: [-0.3, 0.3]
+augmentation_channel_scale: [0.9, 1.1]
+augmentation_channel_shift: [-0.2, 0.2]
 augmentation_noise_mean: 0.04
-augmentation_noise_std: 0.02
+augmentation_noise_std: 0.03
 augmentation_rotation: 3.141
 augmentation_scale: [0.7, 1.1]
 augmentation_shear: [-0.3, 0.3]
@@ -17,13 +17,12 @@ data_name: tags
 
 # only use sample with a discriminator score greater then this threshold
 discriminator_threshold: 0.02
-force: false
-nb_epoch: 120
+nb_epoch: 80
 nb_units: 16
-use_channel_scale_shift_augmentation: true
+use_channel_scale_shift_augmentation: false
 use_hist_equalization: false
 use_noise_augmentation: true
 use_warp_augmentation: true
 
-shuffle_data: true
-verbose: 1
+shuffle_data: false
+verbose: 0

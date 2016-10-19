@@ -674,6 +674,24 @@ class RandomSwitch(Layer):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+def decoder_baseline(label_sizes, nb_bits=12, data_shape=(1, 64, 64),
+                          depth=1,
+                          nb_filter=16, optimizer='adam'):
+    n = nb_filter
+    input = Input(shape=data_shape)
+    x = sequential([
+        conv2d_block(n, depth=depth, pooling='max'),    # 32x32
+        conv2d_block(2*n, depth=depth, pooling='max'),  # 16x16
+        conv2d_block(4*n, depth=depth, pooling='max'),  # 8x8
+        conv2d_block(8*n, depth=depth, pooling='max'),  # 4x4
+    ])(input)
+    outputs, losses = decoder_end_block(x, label_sizes, nb_bits,
+                                        activation=lambda: ELU())
+    model = Model(input, list(outputs.values()))
+    model.compile(optimizer, loss=list(losses.values()),)
+    return model
+
+
 def decoder_stochastic_wrn(label_sizes,
                            nb_bits=12,
                            data_shape=(1, 64, 64),
