@@ -3,10 +3,10 @@
 units: 38
 
 # number of dense layers before the projection
-nb_dense: "1024,1024"
+nb_dense: "512,512"
 
 # number of conv layers per resolution
 depth: 2
 
 # train this number of epochs
-epoch: 500
+epoch: 150

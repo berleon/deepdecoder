@@ -43,6 +43,7 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     output_basename = os.path.join(output_dir, basename)
 
     tag_dataset = DistributionHDF5Dataset(tags_3d_hdf5_fname)
+    tag_dataset._dataset_created = True
     print("Got {} images from the 3d model".format(tag_dataset.nb_samples))
     weights_fname = output_basename + ".hdf5"
     if os.path.exists(weights_fname) and not force:
@@ -68,10 +69,11 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     nb_input = next(generator(batch_size))[0].shape[1]
 
     x = Input(shape=(nb_input,))
-    mask, depth_map = tag3d_network_dense(x, nb_units=nb_units, depth=depth,
-                                          nb_dense_units=nb_dense)
-    g = Model(x, [mask, depth_map])
-    optimizer = SGD(momentum=0.8, nesterov=True)
+    tag3d, depth_map = tag3d_network_dense(x, nb_units=nb_units, depth=depth,
+                                           nb_dense_units=nb_dense)
+    g = Model(x, [tag3d, depth_map])
+    # optimizer = SGD(momentum=0.8, nesterov=True)
+    optimizer = Nadam()
 
     g.compile(optimizer, loss=['mse', 'mse'], loss_weights=[1, 1/3.])
 
@@ -107,9 +109,8 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
     with open(output_basename + '_loss_history.json', 'w+') as f:
         json.dump(history.history, f)
 
-    fig, _ = history.plot(metrics='loss')
+    fig, _ = history.plot()
     fig.savefig(output_basename + "_loss.png")
-
     print("Saved weights to: {}".format(weights_fname))
 
 

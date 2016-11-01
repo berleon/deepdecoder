@@ -41,7 +41,7 @@ setup(
             'bb_sample_from_rendergan = deepdecoder.scripts.sample_from_rendergan:main',
             'bb_train_decoder = deepdecoder.scripts.train_decoder:main',
             'bb_train_multiple_decoders = deepdecoder.scripts.train_multiple_decoders:main',
-            'bb_evalute_decoder = deepdecoder.scripts.evaluate_decoder:main',
+            'bb_evaluate_decoder = deepdecoder.scripts.evaluate_decoder:main',
             'bb_make = deepdecoder.scripts.make:main',
             'shuffle_hdf5 = deepdecoder.scripts.shuffle_hdf5:main',
         ]

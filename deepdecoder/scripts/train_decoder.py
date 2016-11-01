@@ -42,6 +42,9 @@ import click
 import sys
 
 
+nb_bits = 12
+
+
 def filter_by_discriminator_score(batch, threshold):
     d_score = batch['discriminator']
     goodenough = d_score.reshape((-1,)) >= threshold
@@ -132,8 +135,11 @@ def bit_split(generator):
     for batch in generator:
         bits = batch.pop('bits')
         bs, nb_bits = bits.shape
+
+        if bits.min() == -1:
+            bits = (bits + 1) / 2.
         for i in range(nb_bits):
-            batch['bit_{}'.format(i)] = (bits[:, i] + 1) / 2.
+            batch['bit_{}'.format(i)] = bits[:, i]
         yield batch
 
 
@@ -141,7 +147,7 @@ def truth_generator(h5_truth, batch_size,
                     missing_label_sizes, tags_name='tags'):
     print("tags_name", tags_name)
     truth_tags = h5_truth[tags_name]
-    truth_bits = h5_truth['bits']
+    truth_bits = (np.array(h5_truth['bits'], dtype=np.float) + 1.) / 2.
 
     nb_bits = truth_bits.shape[-1]
     idx = 0
@@ -430,6 +436,8 @@ class DecoderTraining:
     def check_generator(self, gen, name):
         x, y = next(gen)
         fig, ax = plt.subplots()
+        # assert np.min(np.array(y)[:nb_bits]) == 0.
+        # assert np.max(np.array(y)[:nb_bits]) == 1.
         sns.distplot(x.flatten(), ax=ax)
         fig.savefig(self.outname("data_histogram_{}.png".format(name)))
         plt.close(fig)
@@ -449,15 +457,15 @@ class DecoderTraining:
         self.check_generator(data_gen(check_samples), "train")
         self.check_generator(truth_gen_only_bits(check_samples), "test")
         vis_out = next(data_gen(nb_vis_samples))
-        nb_bits = 12
         vis_bits = np.array(vis_out[1][:nb_bits]).T
         save_samples(vis_out[0][:, 0], vis_bits,
                      self.outname(marker + "_train_samples.png"))
         gt_data, gt_bits = next(truth_gen_only_bits(nb_vis_samples))
         gt_bits = np.array(gt_bits).T
-        print("gt_data", gt_data.shape)
+        print("gt_data", gt_data.shape, gt_data.min(), gt_data.max())
+        print("gt_bits", gt_bits.shape, gt_bits.min(), gt_bits.max())
         save_samples(gt_data[:, 0], gt_bits,
-                     self.outname(marker + "_test_samples.png"))
+                     self.outname(marker + "_val_samples.png"))
         # build model
         bs = self.batch_size
         label_output_sizes = self.get_label_output_sizes()

@@ -26,10 +26,11 @@ from keras.engine.topology import merge, Input
 from keras.engine.training import Model
 from keras.regularizers import Regularizer, l2
 import keras.backend as K
+import keras.initializations
 from theano.ifelse import ifelse
 from theano.tensor.shared_randomstreams import RandomStreams
 
-from diktya.func_api_helpers import sequential, concat
+from diktya.func_api_helpers import sequential, concat, name_tensor
 from diktya.blocks import resnet, conv2d_block
 from diktya.layers.core import Subtensor, InBounds
 from beesgrid import NUM_MIDDLE_CELLS, NUM_CONFIGS
@@ -129,11 +130,14 @@ def tag3d_network_dense(input, nb_units=64, nb_dense_units=[512, 512],
     n = nb_units
 
     def conv(n, repeats=None):
+        def normal(shape, name=None):
+            return keras.initializations.normal(shape, scale=0.01, name=name)
+
         if repeats is None:
             repeats = depth
         return [
             [
-                Convolution2D(n, 3, 3, border_mode='same'),
+                Convolution2D(n, 3, 3, border_mode='same', init='he_normal'),
                 Activation('relu')
             ] for _ in range(repeats)
         ]
@@ -167,7 +171,7 @@ def tag3d_network_dense(input, nb_units=64, nb_dense_units=[512, 512],
         Convolution2D(1, 3, 3, border_mode='same', init='he_normal'),
     ], ns='depth_map', trainable=trainable)(base)
 
-    return tag3d, depth_map
+    return name_tensor(tag3d, 'tag3d'), name_tensor(depth_map, 'depth_map')
 
 
 def tag_3d_network_conv(input, nb_inputs, nb_units=64, depth=2, filter_size=3):

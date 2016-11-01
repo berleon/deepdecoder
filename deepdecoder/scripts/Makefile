@@ -86,8 +86,8 @@ artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 		--nb-samples $(call setting,nb_test_samples,artificial_data_set.yaml) \
 		--selected-outputs "$(call setting,selected_outputs,artificial_data_set.yaml)" \
 		${data}/artificial_test_set_$(artificial_data_set_date).hdf5
-	echo '{"train_set": "${data}/artificial_train_set.hdf5",\n' \
-		 '"test_set": "${data}/artificial_test_set.hdf5"}' \
+	echo '{"train_set": "${data}/artificial_train_set_$(artificial_data_set_date).hdf5",\n' \
+		 '"test_set": "${data}/artificial_test_set_$(artificial_data_set_date).hdf5"}' \
 		 > artificial_data_set
 
 decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt.yaml

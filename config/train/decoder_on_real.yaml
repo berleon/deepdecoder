@@ -19,7 +19,7 @@ data_name: tags
 discriminator_threshold: 0.02
 nb_epoch: 80
 nb_units: 16
-use_channel_scale_shift_augmentation: false
+use_channel_scale_shift_augmentation: true
 use_hist_equalization: false
 use_noise_augmentation: true
 use_warp_augmentation: true
