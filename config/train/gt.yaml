@@ -1,5 +1,5 @@
 # ground truth validation file
-gt_val: "/mnt/storage/leon/data/gt/gt_test_shuffled.hdf5"
+gt_val: "/mnt/storage/leon/data/gt/gt_train_shuffled.hdf5"
 
 # ground truth test file
 gt_test: "/mnt/storage/leon/data/gt/gt_test_shuffled.hdf5"
