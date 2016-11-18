@@ -1,8 +1,11 @@
 numpy>=1.10.0
 keras>=1.0.1
 pytest>=2.8.5
+pytest-flake8>0.8.0
 scikit-image>=0.11.3
 more_itertools==2.2
 shyaml
-git+https://github.com/nebw/saliency-localizer.git#egg=saliency-localizer
+click>=6.0
+progressbar2>=3.11.0
 git+https://github.com/berleon/pybeesgrid.git#egg=beesgrid
+git+https://github.com/BioroboticsLab/bb_pipeline.git@egg=pipeline
