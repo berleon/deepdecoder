@@ -22,4 +22,5 @@ use_channel_scale_shift_augmentation: false
 use_hist_equalization: false
 use_noise_augmentation: false
 use_warp_augmentation: false
+use_combined_data: True
 batch_size: 128

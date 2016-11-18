@@ -17,7 +17,7 @@ import numpy as np
 from keras.models import Sequential
 import keras.initializations
 from keras.layers.core import Dense, Flatten, Reshape, Activation, \
-    Layer, Dropout, Lambda
+    Layer, Dropout
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, \
     UpSampling2D, AveragePooling2D
 from keras.layers.advanced_activations import LeakyReLU, ELU
@@ -25,9 +25,9 @@ from keras.layers.normalization import BatchNormalization
 from keras.engine.topology import merge, Input
 from keras.engine.training import Model
 from keras.regularizers import Regularizer, l2
+import keras
 import keras.backend as K
 import keras.initializations
-from theano.ifelse import ifelse
 from theano.tensor.shared_randomstreams import RandomStreams
 
 from diktya.func_api_helpers import sequential, concat, name_tensor
@@ -679,8 +679,7 @@ class RandomSwitch(Layer):
 
 
 def decoder_baseline(label_sizes, nb_bits=12, data_shape=(1, 64, 64),
-                          depth=1,
-                          nb_filter=16, optimizer='adam'):
+                     depth=1, nb_filter=16, optimizer='adam'):
     n = nb_filter
     input = Input(shape=data_shape)
     x = sequential([
@@ -708,7 +707,6 @@ def decoder_stochastic_wrn(label_sizes,
                            wrn_k=2,
                            death_rate=0.5,
                            optimizer='adam'):
-
 
     def norm_act_block():
         def f(inputs):

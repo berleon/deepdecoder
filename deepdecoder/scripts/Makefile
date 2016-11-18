@@ -94,6 +94,7 @@ decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt
 	$(ensure_out_dirs_exists)
 	mkdir -p $(models)/decoder
 	bb_train_decoder \
+		--gt-train $(call setting,gt_train,gt.yaml) \
 		--gt-val $(call setting,gt_val,gt.yaml) \
 		--gt-test $(call setting,gt_test,gt.yaml) \
 		--train-sets $(call get,train_set,artificial_data_set) \

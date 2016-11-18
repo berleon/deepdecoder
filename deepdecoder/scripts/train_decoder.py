@@ -20,9 +20,10 @@ import matplotlib.pyplot as plt
 from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn, decoder_dummy, \
     decoder_baseline
 from deepdecoder.data import DistributionHDF5Dataset, get_distribution_hdf5_attrs
+import collections
 import os
 import numpy as np
-from keras.callbacks import EarlyStopping, Callback
+from keras.callbacks import Callback
 from keras.optimizers import SGD
 import keras.backend as K
 from diktya.callbacks import LearningRateScheduler, HistoryPerBatch, \
@@ -109,26 +110,30 @@ def _nb_samples_per_iterator(prefetch_batch_size, batch_size, pos):
     return num_samples
 
 
-def zip_dataset_iterators(dataset_iters, batch_size):
-    n = len(dataset_iters)
-    prefetch_factor = 10
-    prefetch_batch_size = batch_size * prefetch_factor
-    iterators = [d_iter(prefetch_batch_size) for d_iter in dataset_iters]
-    for batches in zip(*iterators):
-        pos = [0] * n
-        for i in range(prefetch_factor):
-            num_samples = _nb_samples_per_iterator(prefetch_batch_size, batch_size, pos)
-            zipped_batch = {n: np.zeros((batch_size,) + a.shape[1:])
-                            for n, a in batches[0].items()}
-            zipped_pos = 0
-            for i, batch in enumerate(batches):
-                for name in batch.keys():
-                    zipped_batch[name][zipped_pos:zipped_pos+num_samples[i]] = \
-                        batch[name][pos[i]:pos[i]+num_samples[i]]
-                pos[i] += num_samples[i]
-                zipped_pos += num_samples[i]
-            assert zipped_pos == batch_size
-            yield zipped_batch
+def zip_dataset_iterators(dataset_iters, batch_size, iter_weights=None):
+    if iter_weights is None:
+        iter_weights = np.ones((len(dataset_iters))) / len(dataset_iters)
+    if type(iter_weights) is not np.ndarray:
+        assert(isinstance(iter_weights, collections.Iterable))
+        iter_weights = np.array(list(iter_weights))
+    assert(np.isclose(np.sum(iter_weights), 1.))
+
+    # largest remainder method (number of samples must exactly equal batch_size)
+    iter_samples = iter_weights * batch_size
+    fractionals, iter_samples_floor = np.modf(iter_samples)
+    num_missing = batch_size - np.sum(iter_samples_floor).astype(np.int)
+    ceil_indices = np.argpartition(1 - fractionals, num_missing - 1)[:num_missing]
+    iter_samples_floor[ceil_indices] += 1
+    iter_samples = iter_samples_floor.astype(np.int)
+    assert(np.sum(iter_samples) == batch_size)
+
+    iters = [it(bs) for it, bs in zip(dataset_iters, iter_samples)]
+    while True:
+        inputs, labels, label_masks = zip(*[next(it) for it in iters])
+        inputs = np.concatenate(inputs)
+        labels = [np.concatenate(l) for l in zip(*labels)]
+        label_masks = [np.concatenate(m) for m in zip(*label_masks)]
+        yield inputs, labels, label_masks
 
 
 def bit_split(generator):
@@ -159,7 +164,9 @@ def truth_generator(h5_truth, batch_size,
         labels = [truth_bits[idx:idx+batch_size][:, i] for i in range(nb_bits)]
         missing_labels = [np.zeros((batch_size, size), dtype=np.float32)
                           for _, size in missing_label_sizes]
-        yield tags, labels + missing_labels
+        label_mask = [np.ones((l.shape[0], ), dtype=np.float32) for l in labels] + \
+                     [np.zeros((l.shape[0], ), dtype=np.float32) for l in missing_labels]
+        yield tags, labels + missing_labels, label_mask
         idx += batch_size
 
 
@@ -224,8 +231,9 @@ class DecoderTraining:
     def default():
         """
         Defaults:
-            gt_test (path): hdf5 files with the test real groud truth data.
-            gt_val (path): hdf5 files with the validation real groud truth data.
+            gt_train (path): hdf5 files with the train real ground truth data.
+            gt_test (path): hdf5 files with the test real ground truth data.
+            gt_val (path): hdf5 files with the validation real ground truth data.
             train_set (path): hdf5 files with the train set.
             test_set (path): hdf5 files with the artificial test set.
             nb_units (int):number of nb_units in the decoder. (default ``16``)
@@ -235,11 +243,13 @@ class DecoderTraining:
             marker (str): marker for the output dir. (default ``""`` )
             discriminator_threshold (float): only use sample over this threshold. (default ``0.02``)
             make-json (path): save bb_make file under this path.
+            use_combined_data (bool): whether to use ground truth train data
             output_dir (path): directory where to save the model weights.
         """
         return {
             'train_sets': None,
             'test_set': None,
+            'gt_train_fname': None,
             'gt_val_fname': None,
             'gt_test_fname': None,
             'nb_epoch': 120,
@@ -263,6 +273,7 @@ class DecoderTraining:
             'decoder_model': 'resnet',
             'data_name': None,
             'shuffle_data': False,
+            'use_combined_data': False,
             'output_dir': None,
             'marker': "",
             'verbose': 0,
@@ -417,12 +428,16 @@ class DecoderTraining:
 
         augmentation = self.augmentation()
 
-        def wrapper(bs):
-            for batch in zip_dataset_iterators(dataset_iterators, bs):
-                data = batch[self.data_name]
-                labels = [batch[l] for l in all_label_names]
-                yield augmentation(data), labels
-        return wrapper
+        def wrapper(iterator):
+            def data_gen(bs):
+                for batch in iterator(bs):
+                    data = batch[self.data_name]
+                    labels = [batch[l] for l in all_label_names]
+                    label_mask = [np.ones(l.shape[0], dtype=np.float32) for l in labels]
+                    yield augmentation(data), labels, label_mask
+            return data_gen
+
+        return lambda bs: zip_dataset_iterators(list(map(wrapper, dataset_iterators)), bs)
 
     def truth_generator_factory(self, h5_truth, missing_label_sizes, tags_name='tags'):
         def wrapper(bs):
@@ -433,8 +448,14 @@ class DecoderTraining:
                 return gen
         return wrapper
 
+    def combined_generator_factory(self, h5_truth, missing_label_sizes, tags_name='tags'):
+        gan_data = self.data_generator_factory()
+        truth_data = self.truth_generator_factory(h5_truth, missing_label_sizes, tags_name)
+
+        return lambda bs: zip_dataset_iterators((gan_data, truth_data), bs, [.95, .05])
+
     def check_generator(self, gen, name):
-        x, y = next(gen)
+        x, y, _ = next(gen)
         fig, ax = plt.subplots()
         # assert np.min(np.array(y)[:nb_bits]) == 0.
         # assert np.max(np.array(y)[:nb_bits]) == 1.
@@ -451,7 +472,16 @@ class DecoderTraining:
         gt_val = h5py.File(self.gt_val_fname)
         print("bits", gt_val["bits"].shape)
         nb_vis_samples = 20**2
-        data_gen = self.data_generator_factory()
+
+        gt_train = h5py.File(self.gt_train_fname)
+
+        label_output_sizes = self.get_label_output_sizes()
+
+        if self.use_combined_data:
+            data_gen = self.combined_generator_factory(gt_train, label_output_sizes)
+        else:
+            data_gen = self.data_generator_factory()
+
         truth_gen_only_bits = self.truth_generator_factory(gt_val, missing_label_sizes=[])
         check_samples = 100
         self.check_generator(data_gen(check_samples), "train")
@@ -460,7 +490,7 @@ class DecoderTraining:
         vis_bits = np.array(vis_out[1][:nb_bits]).T
         save_samples(vis_out[0][:, 0], vis_bits,
                      self.outname(marker + "_train_samples.png"))
-        gt_data, gt_bits = next(truth_gen_only_bits(nb_vis_samples))
+        gt_data, gt_bits, gt_masks = next(truth_gen_only_bits(nb_vis_samples))
         gt_bits = np.array(gt_bits).T
         print("gt_data", gt_data.shape, gt_data.min(), gt_data.max())
         print("gt_bits", gt_bits.shape, gt_bits.min(), gt_bits.max())
@@ -468,7 +498,6 @@ class DecoderTraining:
                      self.outname(marker + "_val_samples.png"))
         # build model
         bs = self.batch_size
-        label_output_sizes = self.get_label_output_sizes()
         model = self.get_model(label_output_sizes)
         # setup training
         hist = HistoryPerBatch(self.output_dir, extra_metrics=['bits_loss', 'val_bits_loss'])
@@ -497,6 +526,7 @@ class DecoderTraining:
                      plot_history, hist_saver]
         if int(self.verbose) == 0:
             callbacks.append(DotProgressBar())
+
         model.fit_generator(
             data_gen(bs),
             samples_per_epoch=bs*self.nb_batches_per_epoch, nb_epoch=self.nb_epoch,
@@ -538,13 +568,14 @@ def get_output_dir(output_dir, config):
               help='save bb_make file.')
 @click.option('--save-default', required=False, type=click.Path(),
               help='save bb_make file.')
+@click.option('--gt-train', type=click.Path())
 @click.option('--gt-test', type=click.Path())
 @click.option('--gt-val', type=click.Path())
 @click.option('--train-sets', type=click.Path(), multiple=True)
 @click.option('--test-set', type=click.Path())
 @click.option('--create-output-dir-in', type=click.Path(resolve_path=True))
 @click.argument('config', required=False, type=click.Path(dir_okay=False, exists=True))
-def main(make_json, save_default, gt_test, gt_val, train_sets, test_set,
+def main(make_json, save_default, gt_train, gt_test, gt_val, train_sets, test_set,
          create_output_dir_in, config):
     config_fname = config
     if save_default:
@@ -565,7 +596,8 @@ def main(make_json, save_default, gt_test, gt_val, train_sets, test_set,
     with open(config_fname) as f:
         config = yaml.load(f)
 
-    config_options = [("gt_test", "gt_test_fname"),
+    config_options = [("gt_train", "gt_train_fname"),
+                      ("gt_test", "gt_test_fname"),
                       ("gt_val", "gt_val_fname"),
                       ("train_sets", "train_sets"),
                       ("test_set", "test_set")]
