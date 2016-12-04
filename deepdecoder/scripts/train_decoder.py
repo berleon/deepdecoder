@@ -20,6 +20,9 @@ import matplotlib.pyplot as plt
 from deepdecoder.networks import decoder_resnet, decoder_stochastic_wrn, decoder_dummy, \
     decoder_baseline
 from deepdecoder.data import DistributionHDF5Dataset, get_distribution_hdf5_attrs
+from deepdecoder.augmentation import config as handmade_augmentation_config, \
+    stack_augmentations as stack_handmade_augmentations, needed_datanames
+
 import collections
 import os
 import numpy as np
@@ -260,6 +263,7 @@ class DecoderTraining:
             'use_warp_augmentation': False,
             'use_diffeomorphism_augmentation': False,
             'use_noise_augmentation': False,
+            'use_handmade_augmentation': False,
             'use_channel_scale_shift_augmentation': False,
             'augmentation_rotation': 0.1 * np.pi,
             'augmentation_scale': (0.8, 1.2),
@@ -269,6 +273,7 @@ class DecoderTraining:
             'augmentation_noise_mean': 0.07,
             'augmentation_noise_std': 0.05,
             'augmentation_diffeomorphism': [(4, 0.3), (8, 0.7), (16, 0.5), (32, 0.5)],
+            'handmade_augmentation': None,
             'discriminator_threshold': 0.02,
             'decoder_model': 'resnet',
             'data_name': None,
@@ -352,6 +357,11 @@ class DecoderTraining:
     def outname(self, *args):
         return os.path.join(self.output_dir, *args)
 
+    def handmade_augmentation(self):
+        c = handmade_augmentation_config.configure(self.handmade_augmentation)
+        augment = stack_handmade_augmentations(self.data_name, c)
+        return augment
+
     def augmentation(self):
         augmentations = []
         if self.use_warp_augmentation and self.use_diffeomorphism_augmentation:
@@ -374,14 +384,12 @@ class DecoderTraining:
                 diffeomorphism=self.augmentation_diffeomorphism
             )
             augmentations.append(aug_warp)
-
         if self.use_channel_scale_shift_augmentation:
             augmentations.append(
                 ChannelScaleShiftAugmentation(
                     self.augmentation_channel_scale,
                     self.augmentation_channel_shift)
             )
-
         if self.use_noise_augmentation:
             aug_noise = NoiseAugmentation(
                 random_std(self.augmentation_noise_mean,
@@ -393,6 +401,7 @@ class DecoderTraining:
 
         if self.use_hist_equalization:
             augmentations.append(HistEqualization())
+
         return chain_augmentations(*augmentations)
 
     def summary(self):
@@ -407,6 +416,12 @@ class DecoderTraining:
             print_key(key)
         print('#' * len(header))
 
+    def iterator_data_names(self):
+        if self.use_handmade_augmentation:
+            return needed_datanames(self.data_name)
+        else:
+            return [self.data_name]
+
     def data_generator_factory(self):
         datasets = [DistributionHDF5Dataset(fname) for fname in self.train_sets]
         dist = None
@@ -419,7 +434,7 @@ class DecoderTraining:
         label_output_sizes = self.get_label_output_sizes()
         all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
             [n for n, _ in label_output_sizes]
-        dataset_names = ['labels', self.data_name]
+        dataset_names = ['labels'] + self.iterator_data_names
         if 'discriminator' in list(dset.keys()):
             dataset_names.append('discriminator')
         dataset_iterators = [lambda bs: bit_split(dataset_iterator(
@@ -427,14 +442,21 @@ class DecoderTraining:
             for dset in datasets]
 
         augmentation = self.augmentation()
+        handmade_augmentation = self.handmade_augmentation()
 
         def wrapper(iterator):
-            def data_gen(bs):
+            def data_gen(bs, with_batch=False):
                 for batch in iterator(bs):
                     data = batch[self.data_name]
                     labels = [batch[l] for l in all_label_names]
                     label_mask = [np.ones(l.shape[0], dtype=np.float32) for l in labels]
-                    yield augmentation(data), labels, label_mask
+                    if self.use_handmade_augmentation:
+                        data = handmade_augmentation(batch)
+
+                    to_yield = [augmentation(data), labels, label_mask]
+                    if with_batch:
+                        to_yield.append(batch)
+                    yield to_yield
             return data_gen
 
         return lambda bs: zip_dataset_iterators(list(map(wrapper, dataset_iterators)), bs)
@@ -454,11 +476,9 @@ class DecoderTraining:
 
         return lambda bs: zip_dataset_iterators((gan_data, truth_data), bs, [.95, .05])
 
-    def check_generator(self, gen, name):
-        x, y, _ = next(gen)
+    def check_generator(self, gen, name, plot_samples=100):
+        x, y, _ = next(gen(plot_samples))
         fig, ax = plt.subplots()
-        # assert np.min(np.array(y)[:nb_bits]) == 0.
-        # assert np.max(np.array(y)[:nb_bits]) == 1.
         sns.distplot(x.flatten(), ax=ax)
         fig.savefig(self.outname("data_histogram_{}.png".format(name)))
         plt.close(fig)
@@ -483,9 +503,8 @@ class DecoderTraining:
             data_gen = self.data_generator_factory()
 
         truth_gen_only_bits = self.truth_generator_factory(gt_val, missing_label_sizes=[])
-        check_samples = 100
-        self.check_generator(data_gen(check_samples), "train")
-        self.check_generator(truth_gen_only_bits(check_samples), "test")
+        self.check_generator(data_gen, "train")
+        self.check_generator(truth_gen_only_bits, "test")
         vis_out = next(data_gen(nb_vis_samples))
         vis_bits = np.array(vis_out[1][:nb_bits]).T
         save_samples(vis_out[0][:, 0], vis_bits,
