@@ -326,5 +326,5 @@ class DistributionHDF5Dataset(HDF5Dataset):
                 labels = [(name, batch.pop(name)) for name in label_names]
                 batch['labels'] = np.zeros(len(labels[0][1]), dtype=dist.norm_dtype)
                 for name, label in labels:
-                    batch['labels'][name] = label
+                    batch['labels'][name] = label.reshape(batch['labels'][name].shape)
             yield batch
