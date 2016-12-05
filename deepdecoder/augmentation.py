@@ -41,7 +41,7 @@ def get_augmentations(name):
 
 
 def needed_datanames(name):
-    needed = set(name)
+    needed = set([name])
     previous = False
     if name == 'tag3d':
         previous = True

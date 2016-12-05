@@ -357,7 +357,7 @@ class DecoderTraining:
     def outname(self, *args):
         return os.path.join(self.output_dir, *args)
 
-    def handmade_augmentation(self):
+    def get_handmade_augmentation(self):
         c = handmade_augmentation_config.configure(self.handmade_augmentation)
         augment = stack_handmade_augmentations(self.data_name, c)
         return augment
@@ -434,7 +434,8 @@ class DecoderTraining:
         label_output_sizes = self.get_label_output_sizes()
         all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
             [n for n, _ in label_output_sizes]
-        dataset_names = ['labels'] + self.iterator_data_names
+        dataset_names = ['labels'] + self.iterator_data_names()
+        print("Used datasets: " + str(dataset_names))
         if 'discriminator' in list(dset.keys()):
             dataset_names.append('discriminator')
         dataset_iterators = [lambda bs: bit_split(dataset_iterator(
@@ -442,7 +443,7 @@ class DecoderTraining:
             for dset in datasets]
 
         augmentation = self.augmentation()
-        handmade_augmentation = self.handmade_augmentation()
+        handmade_augmentation = self.get_handmade_augmentation()
 
         def wrapper(iterator):
             def data_gen(bs, with_batch=False):

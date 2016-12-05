@@ -90,6 +90,7 @@ artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 		 '"test_set": "${data}/artificial_test_set_$(artificial_data_set_date).hdf5"}' \
 		 > artificial_data_set
 
+decoder_settings=decoder.yaml
 decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt.yaml
 	$(ensure_out_dirs_exists)
 	mkdir -p $(models)/decoder
@@ -101,7 +102,7 @@ decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt
 		--test-set $(call get,test_set,artificial_data_set) \
 		--create-output-dir-in $(models)/decoder \
 		--make-json decoder \
-		$(setting_dir)/decoder.yaml \
+		$(setting_dir)/$(decoder_settings) \
 
 decoder_evaluation:
 	bb_evaluate_decoder $(call get,path,decoder)

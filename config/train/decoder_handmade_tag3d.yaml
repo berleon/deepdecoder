@@ -12,7 +12,7 @@ augmentation_noise_std: 0.06
 augmentation_rotation: 0.1
 augmentation_scale: [0.8, 1.1]
 augmentation_shear: [-0.3, 0.3]
-data_name: fake
+data_name: tag3d
 
 # only use sample with a discriminator score greater then this threshold
 discriminator_threshold: 0.02
@@ -24,7 +24,7 @@ use_noise_augmentation: false
 use_warp_augmentation: false
 use_combined_data: false
 batch_size: 128
-use_handmade_augmentation: false
+use_handmade_augmentation: true
 handmade_augmentation:
   background:
     intensity_scale_high: 1.2
