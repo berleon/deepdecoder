@@ -1,4 +1,5 @@
 
+import pytest
 from deepdecoder.augmentation import config, stack_augmentations
 from deepdecoder.data import DistributionHDF5Dataset
 from diktya.numpy import tile, zip_tile, image_save
@@ -14,10 +15,16 @@ def test_config(outdir):
 def test_stack_augmentations(outdir):
     fname = "/home/leon/uni/bachelor/deepdecoder/test/data/00350.hdf5"
     dset = DistributionHDF5Dataset(fname)
-    batch = next(dset.iter(10**2))
+    batch = next(dset.iter(15**2))
 
+    image_save(str(outdir.join('real.png')), tile(batch['real']))
+    image_save(str(outdir.join('fake.png')), np.clip(tile(batch['fake']), -1, 1))
+    # for i, name in enumerate(['tag3d']):
     for i, name in enumerate(['tag3d', 'tag3d_lighten', 'fake_without_noise', 'fake']):
         augment = stack_augmentations(name, config)
         xs = augment(batch)
-        out = np.clip(zip_tile(batch['fake'], batch[name], xs), -1, 1)
-        image_save(str(outdir.join('{}_{}_augmented.png'.format(i, name))), out)
+        image_save(str(outdir.join('{}_{}_aug_tiled.png'.format(i, name))), tile(xs))
+
+
+if __name__ == "__main__":
+    pytest.main(__file__)

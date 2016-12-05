@@ -86,13 +86,13 @@ config = cfg.Config()
 
 @config('spotlights')
 class SpotlightAugmentation():
-    def __init__(self, nb_spots_prob=[0.7, 0.1, 0.1, 0.07, 0.03],
+    def __init__(self, nb_spots_prob=[15, 1, 1, 1, 1],
                  spot_cov_scale_low=1,
-                 spot_cov_scale_high=2,
-                 intensity_scale_low=0.5,
-                 intensity_scale_high=3,
+                 spot_cov_scale_high=3,
+                 intensity_scale_low=0.2,
+                 intensity_scale_high=2,
                  ):
-        self.nb_spots_prob = nb_spots_prob
+        self.nb_spots_prob = np.array(nb_spots_prob) / np.sum(nb_spots_prob)
         self.spot_cov_scale = lambda: np.random.uniform(spot_cov_scale_low, spot_cov_scale_high)
         self.intensity_scale = lambda: np.random.uniform(intensity_scale_low, intensity_scale_high)
 
@@ -113,13 +113,15 @@ class SpotlightAugmentation():
                     spots_pos.append((y, x))
 
             for pos in spots_pos:
-                spotlight = random_gauss(pos, xs.shape[-1], cov_scale=np.random.uniform(1, 4))
-                x_spots[i] += np.random.uniform(0.5, 3)*spotlight
+                spotlight = random_gauss(pos, xs.shape[-1],
+                                         cov_scale=self.spot_cov_scale())
+                x_spots[i] += self.intensity_scale()*spotlight
         return x_spots
 
 
 def random_backgrond(weights=[2, 8, 4, 3, 0.2, 0.2, 0.5], start_level=1, end_level=None):
     img = np.random.normal(0, 1, (start_level, start_level)) * weights[0]
+    i = start_level - 1
     for i, w in enumerate(weights[1:], start_level):
         r = np.random.normal(0, 1, (2**i, 2**i))
         img = rescale(img, 2) + w*r
@@ -136,16 +138,17 @@ def random_backgrond(weights=[2, 8, 4, 3, 0.2, 0.2, 0.5], start_level=1, end_lev
 class BackgroundAugmentation:
     def __init__(self, pyramid_weights=[2, 4, 4, 3],
                  intensity_scale_low=0.7,
-                 intensity_scale_high=1.2,
-                 intensity_shift_mean=-0.5,
-                 intensity_shift_std=0.2,
+                 intensity_scale_high=0.8,
+                 intensity_shift_low=-1.1,
+                 intensity_shift_high=-0.5,
                  segmentation_blur_low=1.5,
                  segmentation_blur_high=3):
 
         self.pyramid_weights = pyramid_weights
         self.intensity_scale = lambda: np.random.uniform(intensity_scale_low, intensity_scale_high)
-        self.intensity_shift = lambda: np.random.normal(intensity_shift_mean, intensity_shift_std)
-        self.segmentation_blur = lambda: np.random.uniform(segmentation_blur_low, segmentation_blur_high)
+        self.intensity_shift = lambda: np.random.uniform(intensity_shift_low, intensity_shift_high)
+        self.segmentation_blur = lambda: np.random.uniform(segmentation_blur_low,
+                                                           segmentation_blur_high)
 
     def __call__(self, xs, tag3d_segmented):
         xs_bg = np.copy(xs)
@@ -157,12 +160,13 @@ class BackgroundAugmentation:
             bg *= self.intensity_scale()
             bg += self.intensity_shift()
             xs_bg[i] = x*istag + bg*(1-istag)
+
         return np.clip(xs_bg, -1, 1)
 
 
 @config('noise')
 class NoiseAugmentation:
-    def __init__(self, noise_low=0.01, noise_high=0.08):
+    def __init__(self, noise_low=0.01, noise_high=0.06):
         self.noise_low = noise_low
         self.noise_high = noise_high
 
@@ -181,9 +185,14 @@ class NoiseAugmentation:
 
 @config('lighting')
 class LightingAugmentation:
-    def __init__(self, scale=0.85, weights=[8, 4, 2, 0, 0, 0, 0]):
+    def __init__(self, scale=0.85,
+
+                 weights=[8, 4, 1]):
         self.weights = weights
-        self.scale = scale
+        self.scale_w = lambda: np.random.uniform(0.1, 0.8)
+        self.scale_b = lambda: np.random.uniform(0.1, 0.2)
+        self.shift = lambda: np.random.uniform(-0.2, -0.0)
+        self.scale_t = lambda: np.random.uniform(0.1, 1.0)
 
     def __call__(self, xs):
         xs_ligh = np.copy(xs)
@@ -192,17 +201,20 @@ class LightingAugmentation:
             x = xs[i, 0]
             b = random_backgrond(self.weights, end_level=6)
             w = random_backgrond(self.weights, end_level=6)
-            t = random_backgrond(self.weights, end_level=6)
-            s = self.scale
-            x_ligh[x < 0] *= s*b[x < 0] + (1 - s)
-            x_ligh[x > 0] *= s*w[x > 0] + (1 - s)
-            x_ligh += 2*s*(t - 0.5)
+            t = random_backgrond([8, 4, 1], end_level=6)
+            sb = self.scale_b()
+            sw = self.scale_w()
+            s = 0.7
+            # sb = sw = st = 0.95
+            x_ligh[x < 0] *= s*sb*b[x < 0] + (1 - s)
+            x_ligh[x > 0] *= s*sw*w[x > 0] + (1 - s)
+            x_ligh += 1.7*(t - 0.5)*self.scale_t() + self.shift()
         return np.clip(xs_ligh, -1, 1)
 
 
 @config('blur')
 class BlurAugmentation:
-    def __init__(self, low=1, high=3):
+    def __init__(self, low=1, high=2.5):
         self.low = low
         self.high = high
 
