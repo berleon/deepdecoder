@@ -73,7 +73,18 @@ def astronaut():
 @pytest.fixture
 def outdir():
     from py.path import local
-    path = local("test").join("out")
+    test_dir = os.path.dirname(__file__)
+    path = local(test_dir).join("out")
+    if not path.ensure(dir=True):
+        path.mkdir()
+    return path
+
+
+@pytest.fixture
+def datadir():
+    from py.path import local
+    test_dir = os.path.dirname(__file__)
+    path = local(test_dir).join("data")
     if not path.ensure(dir=True):
         path.mkdir()
     return path

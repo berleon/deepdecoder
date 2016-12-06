@@ -1,0 +1,43 @@
+background:
+  intensity_scale_high: 0.8
+  intensity_scale_low: 0.7
+  intensity_shift_high: -0.5
+  intensity_shift_low: -1.1
+  pyramid_weights:
+  - 2
+  - 4
+  - 4
+  - 3
+  segmentation_blur_high: 6
+  segmentation_blur_low: 1.5
+blur:
+  high: 3.5
+  low: 1
+lighting:
+  scale: 0.9
+  scale_b_high: 0.2
+  scale_b_low: 0.1
+  scale_t_high: 1.0
+  scale_t_low: 0.7
+  scale_w_high: 1.0
+  scale_w_low: 0.1
+  shift_high: 0.0
+  shift_low: 0.1
+  weights:
+  - 8
+  - 4
+  - 1
+noise:
+  noise_high: 0.10
+  noise_low: 0.01
+spotlights:
+  intensity_scale_high: 2
+  intensity_scale_low: 0.2
+  nb_spots_prob:
+  - 15
+  - 1
+  - 1
+  - 1
+  - 1
+  spot_cov_scale_high: 3
+  spot_cov_scale_low: 1

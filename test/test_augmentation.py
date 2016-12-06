@@ -12,8 +12,10 @@ def test_config(outdir):
     config.dump(str(outdir.join('augmentation.yml')))
 
 
-def test_stack_augmentations(outdir):
+def test_stack_augmentations(outdir, datadir):
     fname = "/home/leon/uni/bachelor/deepdecoder/test/data/00350.hdf5"
+    myconfig = config.load(str(datadir.join('augmentation.yml')))
+
     dset = DistributionHDF5Dataset(fname)
     batch = next(dset.iter(15**2))
 

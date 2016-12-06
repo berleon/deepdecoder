@@ -185,14 +185,18 @@ class NoiseAugmentation:
 
 @config('lighting')
 class LightingAugmentation:
-    def __init__(self, scale=0.85,
-
+    def __init__(self, scale=0.7,
+                 scale_w_low=0.1, scale_w_high=0.8,
+                 scale_b_low=0.1, scale_b_high=0.2,
+                 shift_low=0.1, shift_high=0.0,
+                 scale_t_low=0.1, scale_t_high=1.0,
                  weights=[8, 4, 1]):
         self.weights = weights
-        self.scale_w = lambda: np.random.uniform(0.1, 0.8)
-        self.scale_b = lambda: np.random.uniform(0.1, 0.2)
-        self.shift = lambda: np.random.uniform(-0.2, -0.0)
-        self.scale_t = lambda: np.random.uniform(0.1, 1.0)
+        self.scale_w = lambda: np.random.uniform(scale_w_low, scale_w_high)
+        self.scale_b = lambda: np.random.uniform(scale_b_low, scale_b_high)
+        self.shift = lambda: np.random.uniform(shift_low, shift_high)
+        self.scale_t = lambda: np.random.uniform(scale_t_low, scale_t_high)
+        self.scale = scale
 
     def __call__(self, xs):
         xs_ligh = np.copy(xs)
@@ -204,8 +208,7 @@ class LightingAugmentation:
             t = random_backgrond([8, 4, 1], end_level=6)
             sb = self.scale_b()
             sw = self.scale_w()
-            s = 0.7
-            # sb = sw = st = 0.95
+            s = self.scale
             x_ligh[x < 0] *= s*sb*b[x < 0] + (1 - s)
             x_ligh[x > 0] *= s*sw*w[x > 0] + (1 - s)
             x_ligh += 1.7*(t - 0.5)*self.scale_t() + self.shift()
