@@ -8,13 +8,13 @@ background:
   - 4
   - 4
   - 3
-  segmentation_blur_high: 6
+  segmentation_blur_high: 4
   segmentation_blur_low: 1.5
 blur:
-  high: 3.5
+  high: 3.0
   low: 1
 lighting:
-  scale: 0.9
+  scale: 0.75
   scale_b_high: 0.2
   scale_b_low: 0.1
   scale_t_high: 1.0
@@ -28,7 +28,7 @@ lighting:
   - 4
   - 1
 noise:
-  noise_high: 0.10
+  noise_high: 0.07
   noise_low: 0.01
 spotlights:
   intensity_scale_high: 2

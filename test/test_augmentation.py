@@ -23,7 +23,7 @@ def test_stack_augmentations(outdir, datadir):
     image_save(str(outdir.join('fake.png')), np.clip(tile(batch['fake']), -1, 1))
     # for i, name in enumerate(['tag3d']):
     for i, name in enumerate(['tag3d', 'tag3d_lighten', 'fake_without_noise', 'fake']):
-        augment = stack_augmentations(name, config)
+        augment = stack_augmentations(name, myconfig)
         xs = augment(batch)
         image_save(str(outdir.join('{}_{}_aug_tiled.png'.format(i, name))), tile(xs))
 
