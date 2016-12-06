@@ -74,8 +74,8 @@ def get_predictions(tp: 'DecoderTraining', cache: bool, data_set, tags_name='tag
 
         batch_size = 128
         gen_factory = tp.truth_generator_factory(h5_truth, fill_zeros, tags_name)
-        tp.check_generator(gen_factory(400), os.path.basename(data_set))
-        tags, bits = next(gen_factory(20**2))
+        tp.check_generator(gen_factory, os.path.basename(data_set), 400)
+        tags, bits, _ = next(gen_factory(20**2))
 
         nb_bits = 12
         bits = np.array(bits[:12]).T
@@ -97,7 +97,7 @@ def get_predictions(tp: 'DecoderTraining', cache: bool, data_set, tags_name='tag
         dset_output = DistributionHDF5Dataset(
             h5_fname, decoder.distribution, nb_samples=total_samples)
         with ProgressBar(max_value=total_samples) as pbar:
-            for tags, gt in gen:
+            for tags, gt, _ in gen:
                 if nb_samples + len(tags) > total_samples:
                     break
                 nb_samples += len(tags)
