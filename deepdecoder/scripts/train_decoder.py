@@ -132,11 +132,24 @@ def zip_dataset_iterators(dataset_iters, batch_size, iter_weights=None):
 
     iters = [it(bs) for it, bs in zip(dataset_iters, iter_samples)]
     while True:
-        inputs, labels, label_masks = zip(*[next(it) for it in iters])
+        zipped = zip(*[next(it) for it in iters])
+        try:
+            inputs, labels, label_masks, batches = zipped
+        except KeyError:
+            inputs, labels, label_masks = zipped
+            batches = None
+
         inputs = np.concatenate(inputs)
         labels = [np.concatenate(l) for l in zip(*labels)]
         label_masks = [np.concatenate(m) for m in zip(*label_masks)]
-        yield inputs, labels, label_masks
+        to_yield = [inputs, labels, label_masks]
+        if batches is not None:
+            concat_batch = {k: [] for k in batches[0].keys()}
+            for batch in batches:
+                for k, v in batch.items():
+                    concat_batch[k].append(v)
+            to_yield.append({k: np.concatenate(v) for k, v in concat_batch.items() })
+        yield to_yield
 
 
 def bit_split(generator):
@@ -252,7 +265,7 @@ class DecoderTraining:
         return {
             'train_sets': None,
             'test_set': None,
-            'gt_train_fname': None,
+            'gt_train_fname': '',
             'gt_val_fname': None,
             'gt_test_fname': None,
             'nb_epoch': 120,
@@ -273,7 +286,7 @@ class DecoderTraining:
             'augmentation_noise_mean': 0.07,
             'augmentation_noise_std': 0.05,
             'augmentation_diffeomorphism': [(4, 0.3), (8, 0.7), (16, 0.5), (32, 0.5)],
-            'handmade_augmentation': None,
+            'handmade_augmentation': {},
             'discriminator_threshold': 0.02,
             'decoder_model': 'resnet',
             'data_name': None,
@@ -422,7 +435,7 @@ class DecoderTraining:
         else:
             return [self.data_name]
 
-    def data_generator_factory(self):
+    def data_generator_factory(self, additional_datasets=[], with_batch=False):
         datasets = [DistributionHDF5Dataset(fname) for fname in self.train_sets]
         dist = None
         for dset in datasets:
@@ -434,7 +447,7 @@ class DecoderTraining:
         label_output_sizes = self.get_label_output_sizes()
         all_label_names = ['bit_{}'.format(i) for i in range(12)] + \
             [n for n, _ in label_output_sizes]
-        dataset_names = ['labels'] + self.iterator_data_names()
+        dataset_names = ['labels'] + self.iterator_data_names() + additional_datasets
         print("Used datasets: " + str(dataset_names))
         if 'discriminator' in list(dset.keys()):
             dataset_names.append('discriminator')
@@ -446,7 +459,7 @@ class DecoderTraining:
         handmade_augmentation = self.get_handmade_augmentation()
 
         def wrapper(iterator):
-            def data_gen(bs, with_batch=False):
+            def data_gen(bs):
                 for batch in iterator(bs):
                     data = batch[self.data_name]
                     labels = [batch[l] for l in all_label_names]
@@ -494,11 +507,11 @@ class DecoderTraining:
         print("bits", gt_val["bits"].shape)
         nb_vis_samples = 20**2
 
-        gt_train = h5py.File(self.gt_train_fname)
 
         label_output_sizes = self.get_label_output_sizes()
 
         if self.use_combined_data:
+            gt_train = h5py.File(self.gt_train_fname)
             data_gen = self.combined_generator_factory(gt_train, label_output_sizes)
         else:
             data_gen = self.data_generator_factory()
