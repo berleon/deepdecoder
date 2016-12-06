@@ -133,10 +133,12 @@ def zip_dataset_iterators(dataset_iters, batch_size, iter_weights=None):
     iters = [it(bs) for it, bs in zip(dataset_iters, iter_samples)]
     while True:
         zipped = zip(*[next(it) for it in iters])
+        inputs = next(zipped)
+        labels = next(zipped)
+        label_masks = next(zipped)
         try:
-            inputs, labels, label_masks, batches = zipped
-        except KeyError:
-            inputs, labels, label_masks = zipped
+            batches = next(zipped)
+        except StopIteration:
             batches = None
 
         inputs = np.concatenate(inputs)
@@ -148,7 +150,7 @@ def zip_dataset_iterators(dataset_iters, batch_size, iter_weights=None):
             for batch in batches:
                 for k, v in batch.items():
                     concat_batch[k].append(v)
-            to_yield.append({k: np.concatenate(v) for k, v in concat_batch.items() })
+            to_yield.append({k: np.concatenate(v) for k, v in concat_batch.items()})
         yield to_yield
 
 
