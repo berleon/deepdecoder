@@ -283,6 +283,7 @@ class DecoderTraining:
             'augmentation_rotation': 0.1 * np.pi,
             'augmentation_scale': (0.8, 1.2),
             'augmentation_shear': (-0.2, 0.2),
+            'augmentation_translation': (-4, 4),
             'augmentation_channel_scale': (0.8, 1.5),
             'augmentation_channel_shift': (-0.5, 0.5),
             'augmentation_noise_mean': 0.07,
@@ -385,6 +386,7 @@ class DecoderTraining:
                 scale=self.augmentation_scale,
                 shear=self.augmentation_shear,
                 diffeomorphism=self.augmentation_diffeomorphism,
+                translation=self.augmentation_translation,
             )
             augmentations.append(aug_warp)
         elif not self.use_diffeomorphism_augmentation and self.use_warp_augmentation:

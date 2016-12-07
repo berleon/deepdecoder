@@ -13,6 +13,7 @@ augmentation_noise_std: 0.03
 augmentation_rotation: 3.141
 augmentation_scale: [0.7, 1.1]
 augmentation_shear: [-0.3, 0.3]
+augmentation_translation: [-4.0, 4.0]
 data_name: tags
 
 # only use sample with a discriminator score greater then this threshold
