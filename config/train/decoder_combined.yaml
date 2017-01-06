@@ -1,0 +1,33 @@
+# marks the decoder path
+# marker: "m"
+
+# decoder model type. either resnet, stochastic_wrn or densenet
+decoder_model: resnet
+
+augmentation_channel_scale: [0.7, 1.2]
+augmentation_channel_shift: [-0.4, 0.4]
+augmentation_noise_mean: 0.07
+augmentation_noise_std: 0.06
+augmentation_rotation: 0.1
+augmentation_scale: [0.8, 1.1]
+augmentation_shear: [-0.3, 0.3]
+augmentation_translation: [-4., 4.]
+data_name: fake
+
+# only use sample with a discriminator score greater then this threshold
+discriminator_threshold: 0.02
+nb_epoch: 150
+nb_units: 16
+use_channel_scale_shift_augmentation: false
+use_hist_equalization: false
+use_noise_augmentation: false
+use_warp_augmentation: false
+use_combined_data: True
+use_diffeomorphism_augmentation: false
+batch_size: 32
+
+use_real_channel_scale_shift_augmentation: true
+use_real_diffeomorphism_augmentation: false
+use_real_hist_equalization: false
+use_real_noise_augmentation: true
+use_real_warp_augmentation: true

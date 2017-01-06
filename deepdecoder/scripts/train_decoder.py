@@ -280,6 +280,11 @@ class DecoderTraining:
             'use_noise_augmentation': False,
             'use_handmade_augmentation': False,
             'use_channel_scale_shift_augmentation': False,
+            'use_real_hist_equalization': False,
+            'use_real_warp_augmentation': False,
+            'use_real_diffeomorphism_augmentation': False,
+            'use_real_noise_augmentation': False,
+            'use_real_channel_scale_shift_augmentation': False,
             'augmentation_rotation': 0.1 * np.pi,
             'augmentation_scale': (0.8, 1.2),
             'augmentation_shear': (-0.2, 0.2),
@@ -421,6 +426,50 @@ class DecoderTraining:
 
         return chain_augmentations(*augmentations)
 
+    def real_augmentation(self):
+        augmentations = []
+        if self.use_real_warp_augmentation and self.use_real_diffeomorphism_augmentation:
+            aug_warp = WarpAugmentation(
+                rotation=(-self.augmentation_rotation, self.augmentation_rotation),
+                scale=self.augmentation_scale,
+                shear=self.augmentation_shear,
+                diffeomorphism=self.augmentation_diffeomorphism,
+                translation=self.augmentation_translation
+            )
+            augmentations.append(aug_warp)
+        elif not self.use_real_diffeomorphism_augmentation and self.use_real_warp_augmentation:
+            aug_warp = WarpAugmentation(
+                rotation=(-self.augmentation_rotation, self.augmentation_rotation),
+                scale=self.augmentation_scale,
+                shear=self.augmentation_shear,
+            )
+            augmentations.append(aug_warp)
+        elif self.use_real_diffeomorphism_augmentation and not self.use_real_warp_augmentation:
+            aug_warp = WarpAugmentation(
+                diffeomorphism=self.augmentation_diffeomorphism
+            )
+            augmentations.append(aug_warp)
+
+        if self.use_real_channel_scale_shift_augmentation:
+            augmentations.append(
+                ChannelScaleShiftAugmentation(
+                    self.augmentation_channel_scale,
+                    self.augmentation_channel_shift)
+            )
+
+        if self.use_real_noise_augmentation:
+            aug_noise = NoiseAugmentation(
+                random_std(self.augmentation_noise_mean,
+                           self.augmentation_noise_std))
+            augmentations.append(aug_noise)
+
+        aug_crop = CropAugmentation(0, (64, 64))
+        augmentations.append(aug_crop)
+
+        if self.use_real_hist_equalization:
+            augmentations.append(HistEqualization())
+        return chain_augmentations(*augmentations)
+
     def summary(self):
         def print_key(key, pad=20):
             val = self.config[key]
@@ -479,20 +528,28 @@ class DecoderTraining:
 
         return lambda bs: zip_dataset_iterators(list(map(wrapper, dataset_iterators)), bs)
 
-    def truth_generator_factory(self, h5_truth, missing_label_sizes, tags_name='tags'):
+    def truth_generator_factory(self, h5_truth, missing_label_sizes,
+                                tags_name='tags', augment=False):
+
+        if augment:
+            augmentation = self.real_augmentation()
+
         def wrapper(bs):
             gen = truth_generator(h5_truth, bs, missing_label_sizes, tags_name)
-            if self.use_hist_equalization:
-                return hist_equalisation(gen)
-            else:
-                return gen
+            if self.use_hist_equalization and not augment:
+                gen = hist_equalisation(gen)
+            for data, labels, mask in gen:
+                if augment:
+                    data = augmentation(data)
+                yield data, labels, mask
         return wrapper
 
     def combined_generator_factory(self, h5_truth, missing_label_sizes, tags_name='tags'):
         gan_data = self.data_generator_factory()
-        truth_data = self.truth_generator_factory(h5_truth, missing_label_sizes, tags_name)
+        truth_data = self.truth_generator_factory(h5_truth, missing_label_sizes,
+                                                  tags_name, augment=True)
 
-        return lambda bs: zip_dataset_iterators((gan_data, truth_data), bs, [.95, .05])
+        return lambda bs: zip_dataset_iterators((gan_data, truth_data), bs, [.5, .5])
 
     def check_generator(self, gen, name, plot_samples=100):
         x, y, _ = next(gen(plot_samples))
@@ -510,7 +567,6 @@ class DecoderTraining:
         gt_val = h5py.File(self.gt_val_fname)
         print("bits", gt_val["bits"].shape)
         nb_vis_samples = 20**2
-
 
         label_output_sizes = self.get_label_output_sizes()
 

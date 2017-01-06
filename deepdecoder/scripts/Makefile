@@ -121,6 +121,19 @@ decoder_on_real: $(setting_dir)/decoder_on_real.yaml $(setting_dir)/gt.yaml
 		--make-json decoder_on_real \
 		$(setting_dir)/decoder_on_real.yaml \
 
+decoder_combined: $(setting_dir)/decoder_combined.yaml $(setting_dir)/gt.yaml
+	$(ensure_out_dirs_exists)
+	mkdir -p $(models)/decoder_combined
+	bb_train_decoder \
+		--gt-train $(call setting,gt_train,gt.yaml) \
+		--gt-val $(call setting,gt_val,gt.yaml) \
+		--gt-test $(call setting,gt_test,gt.yaml) \
+		--train-sets $(call get,train_set,artificial_data_set) \
+		--test-set $(call get,test_set,artificial_data_set) \
+		--create-output-dir-in $(models)/decoder_combined \
+		--make-json decoder_combined \
+		$(setting_dir)/decoder_combined.yaml \
+
 
 
 multiple_decoder_data_name = $(call setting,data_name,multiple_decoders.yaml)
