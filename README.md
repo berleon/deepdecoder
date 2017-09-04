@@ -30,8 +30,9 @@ You might be interested in:
 1. Now your can run the code.
     ```bash
     $ mkdir build
+    $ echo "{\"path\": \"`realpath data/real_tags.hdf5`\"}" > build/real_dataset
+    $ realpath data > build/gt_data_dir
     $ cd build
-    $ echo '{"path": "../../data/real_tags.hdf5"}' > real_dataset
     $ bb_make ../config/train tag3d_network
     ```
    The ``bb_make`` program is a s lim wrapper around this [Makefile](https://github.com/berleon/deepdecoder/blob/master/deepdecoder/scripts/Makefile).

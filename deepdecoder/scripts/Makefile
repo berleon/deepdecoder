@@ -3,14 +3,17 @@ data=$(shell realpath data)
 models=$(shell realpath models)
 ensure_out_dirs_exists = mkdir -p $(data) $(models)
 
+gt_data_dir = $(shell cat gt_data_dir)
 setting = $(shell cat $(setting_dir)/$(2) | shyaml get-value $(1))
-get_path = $(shell cat $(setting_dir)/$(2) | shyaml get-value $(1) | xargs -i realpath $(setting_dir)/{})
+gt_data = $(shell cat $(setting_dir)/gt.yaml | shyaml get-value $(1) | xargs -i realpath $(gt_data_dir)/{})
 get = $(shell cat $(2) | shyaml get-value $(1))
 
 test_get:
 	echo '{"hello": "world"}' > /tmp/test_get
 	test "$(call get,hello,/tmp/test_get)" = "world"
 
+test_gt_data:
+	echo $(call gt_data,gt_val)
 
 REAL_TAGS_DATASET=$(data)/real_tags.hdf5
 # build the real datasets from raw images. Not needed as the real_tags file can
@@ -50,7 +53,7 @@ tag3d_network: tag3d_data_set $(setting_dir)/tag3d_network.yaml
 	$(ensure_out_dirs_exists)
 	bb_train_tag3d_network \
 		--force \
-		--3d-tags $(call get_path,path,tag3d_data_set) \
+		--3d-tags $(call get,path,tag3d_data_set) \
 		--units $(n3d_units) \
 		--depth $(n3d_depth)\
 		--epoch $(n3d_epoch) \
@@ -66,8 +69,8 @@ rendergan_dir = $(models)/rendergan/
 rendergan: tag3d_network real_dataset $(setting_dir)/rendergan.yaml
 	$(ensure_out_dirs_exists)
 	bb_train_rendergan \
-		--real $(call get_path,path,real_dataset) \
-		--nntag3d $(call get_path,weights_path,tag3d_network) \
+		--real $(call get,path,real_dataset) \
+		--nntag3d $(call get,weights_path,tag3d_network) \
 		--output-dir $(rendergan_dir) \
 		--force  \
 		--epoch $(call setting,epoch,rendergan.yaml) \
@@ -75,7 +78,7 @@ rendergan: tag3d_network real_dataset $(setting_dir)/rendergan.yaml
 		--gen-units $(generator_units)
 	echo '{"path": "${rendergan_dir}", "epoch": "300"}' > rendergan
 
-render_gan_models_dir = $(call get_path,path,rendergan)/models/$(call setting,epoch,artificial_data_set.yaml)/
+render_gan_models_dir = $(call get,path,rendergan)/models/$(call setting,epoch,artificial_data_set.yaml)/
 # creates an artificial dataset by using the GAN
 artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 	$(ensure_out_dirs_exists)
@@ -102,20 +105,20 @@ decoder_model: artificial_data_set $(setting_dir)/$(decoder_settings) $(setting_
 	$(ensure_out_dirs_exists)
 	mkdir -p $(models)/decoder
 	bb_train_decoder \
-		--gt-train $(call get_path,gt_train,gt.yaml) \
-		--gt-val $(call get_path,gt_val,gt.yaml) \
-		--gt-test $(call get_path,gt_test,gt.yaml) \
-		--train-sets $(call get_path,train_set,artificial_data_set) \
-		--test-set $(call get_path,test_set,artificial_data_set) \
+		--gt-train $(call gt_data,gt_train,gt.yaml) \
+		--gt-val $(call gt_data,gt_val,gt.yaml) \
+		--gt-test $(call gt_data,gt_test,gt.yaml) \
+		--train-sets $(call get,train_set,artificial_data_set) \
+		--test-set $(call get,test_set,artificial_data_set) \
 		--create-output-dir-in $(models)/decoder \
 		--make-json decoder_model \
 		$(setting_dir)/$(decoder_settings) \
 
 decoder_evaluation:
-	bb_evaluate_decoder $(call get_path,path,decoder_model)
+	bb_evaluate_decoder $(call get,path,decoder_model)
 
 decoder_evaluation_on_real:
-	bb_evaluate_decoder $(call get_path,path,decoder_on_real)
+	bb_evaluate_decoder $(call get,path,decoder_on_real)
 
 decoder: decoder_model decoder_evaluation
 
@@ -123,10 +126,10 @@ decoder_on_real: $(setting_dir)/decoder_on_real.yaml $(setting_dir)/gt.yaml
 	$(ensure_out_dirs_exists)
 	mkdir -p $(models)/decoder_on_real
 	bb_train_decoder \
-		--gt-val $(call get_path,gt_train_val,gt.yaml) \
-		--gt-test $(call get_path,gt_train_test,gt.yaml) \
-		--train-sets $(call get_path,gt_train,gt.yaml) \
-		--test-set $(call get_path,gt_train,gt.yaml) \
+		--gt-val $(call gt_data,gt_train_val,gt.yaml) \
+		--gt-test $(call gt_data,gt_train_test,gt.yaml) \
+		--train-sets $(call setting,gt_train,gt.yaml) \
+		--test-set $(call setting,gt_train,gt.yaml) \
 		--create-output-dir-in $(models)/decoder_on_real \
 		--make-json decoder_on_real \
 		$(setting_dir)/decoder_on_real.yaml \
@@ -135,11 +138,11 @@ decoder_combined: $(setting_dir)/decoder_combined.yaml $(setting_dir)/gt.yaml
 	$(ensure_out_dirs_exists)
 	mkdir -p $(models)/decoder_combined
 	bb_train_decoder \
-		--gt-train $(call get_path,gt_train,gt.yaml) \
-		--gt-val $(call get_path,gt_val,gt.yaml) \
-		--gt-test $(call get_path,gt_test,gt.yaml) \
-		--train-sets $(call get_path,train_set,artificial_data_set) \
-		--test-set $(call get_path,test_set,artificial_data_set) \
+		--gt-train $(call gt_data,gt_train,gt.yaml) \
+		--gt-val $(call gt_data,gt_val,gt.yaml) \
+		--gt-test $(call gt_data,gt_test,gt.yaml) \
+		--train-sets $(call get,train_set,artificial_data_set) \
+		--test-set $(call get,test_set,artificial_data_set) \
 		--create-output-dir-in $(models)/decoder_combined \
 		--make-json decoder_combined \
 		$(setting_dir)/decoder_combined.yaml \
@@ -149,10 +152,10 @@ decoder_combined: $(setting_dir)/decoder_combined.yaml $(setting_dir)/gt.yaml
 multiple_decoder_data_name = $(call setting,data_name,multiple_decoders.yaml)
 multiple_decoders: artificial_data_set $(setting_dir)/multiple_decoders.yaml $(setting_dir)/gt.yaml
 	bb_train_multiple_decoders  \
-		--gt-val $(call get_path,gt_val,gt.yaml) \
-		--gt-test $(call get_path,gt_test,gt.yaml) \
-		--train-set $(call get_path,train_set,artificial_data_set) \
-		--test-set $(call get_path,test_set,artificial_data_set) \
+		--gt-val $(call gt_data,gt_val,gt.yaml) \
+		--gt-test $(call gt_data,gt_test,gt.yaml) \
+		--train-set $(call get,train_set,artificial_data_set) \
+		--test-set $(call get,test_set,artificial_data_set) \
 		--n-jobs $(call setting,n_jobs,multiple_decoders.yaml) \
 		--n-trails $(call setting,n_trails,multiple_decoders.yaml) \
 		--data-name "$(multiple_decoder_data_name)" \
