@@ -15,11 +15,11 @@ You might be interested in:
 ## Run the code
 
 1. Build the docker image as described in [docker/README.md](docker/README.md)
-1. Start a docker container and ensure you have enough disk space ~500GB.
-1. Mount or clone this repository into the docker container.
+1. Start a docker container and ensure you have enough disk space ~300GB.
+1. Mount or clone this repository into the docker container. Let `$REPO_DIR`
+   contain the path to the repository.
 1. Install the repository with `pip3 install -e . `.
-1. Download all files from this [google drive directory](https://drive.google.com/drive/folders/0B4-Jw9T9VL8nakJwa1U0YU9nUVU) and place them in the `$REPO_DIR/data`
-   directory. You might find the [gdrive cli tool](https://github.com/prasmussen/gdrive) useful.
+1. Download all files from this [google drive directory](https://drive.google.com/drive/folders/0B4-Jw9T9VL8nakJwa1U0YU9nUVU) and place them in the `$REPO_DIR/data` directory. You might find the [gdrive cli tool](https://github.com/prasmussen/gdrive) useful.
    Check the sha1 sums:
     ```
     db00d1ae8d1920c6d4faa830cebcd5783b44e905  gt_test_shuffled.hdf5
