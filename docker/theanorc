@@ -1,0 +1,16 @@
+[global]
+floatX = float32
+device = gpu0
+allow_gc = True
+optimizer_including = conv_meta
+
+[nvcc]
+fastmath = True
+
+[dnn.conv]
+algo_fwd = time_once
+algo_bwd_data = time_once
+algo_bwd_filter = time_once
+
+[lib]
+cnmem = 0.001

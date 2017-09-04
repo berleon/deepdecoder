@@ -4,6 +4,7 @@ models=$(shell realpath models)
 ensure_out_dirs_exists = mkdir -p $(data) $(models)
 
 setting = $(shell cat $(setting_dir)/$(2) | shyaml get-value $(1))
+setting = $(shell cat $(setting_dir)/$(2) | shyaml get-value $(1))
 get = $(shell cat $(2) | shyaml get-value $(1))
 
 test_get:
@@ -12,6 +13,8 @@ test_get:
 
 
 REAL_TAGS_DATASET=$(data)/real_tags.hdf5
+# build the real datasets from raw images. Not needed as the real_tags file can
+# be download.
 real_dataset: $(setting_dir)/real_images.txt
 	$(ensure_out_dirs_exists)
 	bb_build_real_tag_dataset --out $(REAL_TAGS_DATASET) \
@@ -19,13 +22,13 @@ real_dataset: $(setting_dir)/real_images.txt
 		$(setting_dir)/real_images.txt
 	echo  '{"path": "$(REAL_TAGS_DATASET)"}' > real_dataset
 
-
 generate_3d_tags_distribution.json:
 	bb_default_3d_tags_distribution generate_3d_tags_distribution.json
 
 
 generated_3d_tags_dir=$(data)/generated_3d_tags/
 generate_3d_tag_samples=$(call setting,nb_samples,tag3d_data_set.yaml)
+# create the dataset of tags from the simple 3D model
 tag3d_data_set: generate_3d_tags_distribution.json $(setting_dir)/tag3d_data_set.yaml
 	$(ensure_out_dirs_exists)
 	bb_generate_3d_tags \
@@ -42,6 +45,7 @@ n3d_depth = $(call setting,depth,tag3d_network.yaml)
 n3d_epoch = $(call setting,epoch,tag3d_network.yaml)
 n3d_nb_dense = $(call setting,nb_dense,tag3d_network.yaml)
 n3d_weights =$(network_3d_tag_dir)/network_tags3d_n$(n3d_units)_d$(n3d_depth)_e$(n3d_epoch).hdf5
+# trains the neural network to emulate the simple 3D model
 tag3d_network: tag3d_data_set $(setting_dir)/tag3d_network.yaml
 	$(ensure_out_dirs_exists)
 	bb_train_tag3d_network \
@@ -58,6 +62,7 @@ tag3d_network: tag3d_data_set $(setting_dir)/tag3d_network.yaml
 generator_units = $(call setting,gen-units,rendergan.yaml)
 discriminator_units = $(call setting,dis-units,rendergan.yaml)
 rendergan_dir = $(models)/rendergan/
+# trains the GAN
 rendergan: tag3d_network real_dataset $(setting_dir)/rendergan.yaml
 	$(ensure_out_dirs_exists)
 	bb_train_rendergan \
@@ -71,6 +76,7 @@ rendergan: tag3d_network real_dataset $(setting_dir)/rendergan.yaml
 	echo '{"path": "${rendergan_dir}", "epoch": "300"}' > rendergan
 
 render_gan_models_dir = $(call get,path,rendergan)/models/$(call setting,epoch,artificial_data_set.yaml)/
+# creates an artificial dataset by using the GAN
 artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 	$(ensure_out_dirs_exists)
 	$(eval artificial_data_set_date := $(shell date -Iseconds))
@@ -91,7 +97,8 @@ artificial_data_set: rendergan $(setting_dir)/artificial_data_set.yaml
 		 > artificial_data_set
 
 decoder_settings=decoder.yaml
-decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt.yaml
+# trains a decoder model
+decoder_model: artificial_data_set $(setting_dir)/$(decoder_settings) $(setting_dir)/gt.yaml
 	$(ensure_out_dirs_exists)
 	mkdir -p $(models)/decoder
 	bb_train_decoder \
@@ -101,11 +108,14 @@ decoder_model: artificial_data_set $(setting_dir)/decoder.yaml $(setting_dir)/gt
 		--train-sets $(call get,train_set,artificial_data_set) \
 		--test-set $(call get,test_set,artificial_data_set) \
 		--create-output-dir-in $(models)/decoder \
-		--make-json decoder \
+		--make-json decoder_model \
 		$(setting_dir)/$(decoder_settings) \
 
 decoder_evaluation:
-	bb_evaluate_decoder $(call get,path,decoder)
+	bb_evaluate_decoder $(call get,path,decoder_model)
+
+decoder_evaluation_on_real:
+	bb_evaluate_decoder $(call get,path,decoder_on_real)
 
 decoder: decoder_model decoder_evaluation
 

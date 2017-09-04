@@ -13,12 +13,6 @@
 # limitations under the License.
 
 from distutils.core import setup
-from pip.req import parse_requirements
-
-
-install_reqs = parse_requirements('requirements.txt', session=False)
-reqs = [str(ir.req) for ir in install_reqs]
-dep_links = [str(req_line.url) for req_line in install_reqs]
 
 
 setup(
@@ -27,8 +21,6 @@ setup(
     description='models for my bacheleor thesis',
     author='Leon Sixt',
     author_email='github@leon-sixt.de',
-    install_requires=reqs,
-    dependency_links=dep_links,
     entry_points={
         'console_scripts': [
             'bb_extract_hd_images = deepdecoder.scripts.extract_hd_images:main',

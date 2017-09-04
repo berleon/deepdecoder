@@ -9,9 +9,10 @@ __pycache__/
 *.png
 data/
 models/
+experiments/
 !test/data
 test/out
-
+docker/*/
 
 # Distribution / packaging
 .Python

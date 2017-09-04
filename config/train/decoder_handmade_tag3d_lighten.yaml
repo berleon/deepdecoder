@@ -1,0 +1,63 @@
+# marks the decoder path
+# marker: "m"
+
+# decoder model type. either resnet or stochastic_wrn
+# decoder_model: stochastic_wrn
+decoder_model: resnet
+
+augmentation_channel_scale: [0.7, 1.2]
+augmentation_channel_shift: [-0.4, 0.4]
+augmentation_noise_mean: 0.07
+augmentation_noise_std: 0.06
+augmentation_rotation: 0.1
+augmentation_scale: [0.8, 1.1]
+augmentation_shear: [-0.3, 0.3]
+data_name: tag3d_lighten
+
+# only use sample with a discriminator score greater then this threshold
+discriminator_threshold: 0.02
+nb_epoch: 80
+nb_units: 16
+use_channel_scale_shift_augmentation: false
+use_hist_equalization: false
+use_noise_augmentation: false
+use_warp_augmentation: false
+use_combined_data: false
+batch_size: 128
+use_handmade_augmentation: true
+handmade_augmentation:
+  background:
+    intensity_scale_high: 0.8
+    intensity_scale_low: 0.7
+    intensity_shift_high: -0.5
+    intensity_shift_low: -1.1
+    pyramid_weights:
+    - 2
+    - 4
+    - 4
+    - 3
+    segmentation_blur_high: 3
+    segmentation_blur_low: 1.5
+  blur:
+    high: 2.5
+    low: 1
+  lighting:
+    scale: 0.85
+    weights:
+    - 8
+    - 4
+    - 1
+  noise:
+    noise_high: 0.06
+    noise_low: 0.01
+  spotlights:
+    intensity_scale_high: 2
+    intensity_scale_low: 0.2
+    nb_spots_prob:
+    - 15
+    - 1
+    - 1
+    - 1
+    - 1
+    spot_cov_scale_high: 3
+    spot_cov_scale_low: 1
