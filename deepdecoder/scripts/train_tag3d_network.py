@@ -57,7 +57,6 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
             labels = []
             for name in batch['labels'].dtype.names:
                 labels.append(batch['labels'][name])
-
             assert not np.isnan(batch['tag3d']).any()
             assert not np.isnan(batch['depth_map']).any()
             labels = np.concatenate(labels, axis=-1)
@@ -73,12 +72,12 @@ def run(output_dir, force, tags_3d_hdf5_fname, nb_units, depth,
                                            nb_dense_units=nb_dense)
     g = Model(x, [tag3d, depth_map])
     # optimizer = SGD(momentum=0.8, nesterov=True)
-    optimizer = Nadam()
+    optimizer = Adam()
 
     g.compile(optimizer, loss=['mse', 'mse'], loss_weights=[1, 1/3.])
 
     scheduler = AutomaticLearningRateScheduler(
-        optimizer, 'loss', epoch_patience=5, min_improvement=0.0002)
+        optimizer, 'loss', epoch_patience=5, min_improvement=0.001)
     history = HistoryPerBatch()
     save = SaveModels({basename + '_snapshot_{epoch:^03}.hdf5': g}, output_dir=output_dir,
                       hdf5_attrs=tag_dataset.get_distribution_hdf5_attrs())

@@ -31,9 +31,12 @@ You might be interested in:
     ```bash
     $ mkdir build
     $ cd build
+    $ echo '{"path": "../../data/real_tags.hdf5"}' > real_dataset
     $ bb_make ../config/train tag3d_network
     ```
-   The ``bb_make`` file is basically a slim wrapper around this [Makefile](https://github.com/berleon/deepdecoder/blob/master/deepdecoder/scripts/Makefile).
+   The ``bb_make`` program is a s lim wrapper around this [Makefile](https://github.com/berleon/deepdecoder/blob/master/deepdecoder/scripts/Makefile).
+   The first argument is the directory of the parameters you want to use and the
+   second is the make target to execute.
 
    Targets:
     * **tag3d_data_set**: Generates a dataset using the simple 3D model.
@@ -49,3 +52,7 @@ You might be interested in:
     $ bb_make ../config/train -o decoder_settings=decoder_handmade_tag3d.yaml decoder
     ```
    This will execute the decoder target but with the `decoder_handmade_tag3d.yaml` file.
+
+   You can also copy the settings directory `$ cp -r config/train
+   config/my_settings` and experiement with your own hyperparameters. Then you
+   have to use `$ bb_make ../config/my_settings`

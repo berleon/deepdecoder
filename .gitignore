@@ -8,6 +8,7 @@ __pycache__/
 
 *.png
 data/
+build/
 models/
 experiments/
 !test/data

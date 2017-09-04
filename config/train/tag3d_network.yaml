@@ -1,12 +1,12 @@
 # number of filters in the last conv layers
 # every conv layer before has double the number of filters
-units: 38
+units: 35
 
 # number of dense layers before the projection
-nb_dense: "512,512"
+nb_dense: "512"
 
 # number of conv layers per resolution
 depth: 2
 
 # train this number of epochs
-epoch: 150
+epoch: 75
