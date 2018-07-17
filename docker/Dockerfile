@@ -1,6 +1,9 @@
 FROM nvidia/cuda:8.0-cudnn5-devel-ubuntu16.04
 MAINTAINER Benjamin Wild <b.w@fu-berlin.de>
 
+# makes sure deb-src in sources.list is not commented out 
+RUN sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list
+
 
 RUN apt-get update && apt-get install -y --assume-yes --install-recommends \
         python \
@@ -126,8 +129,8 @@ RUN pip3 install \
 
 RUN pip3 install git+https://github.com/berleon/keras.git@losses#egg=Keras
 RUN pip3 install git+https://github.com/BioroboticsLab/diktya.git@c21788bc0fd51f16f920d1ee0f3ae6c88b183ad1#egg=diktya
-RUN pip3 install git+https://github.com/BioroboticsLab/bb_binary.git@f12f9276987b4f60e9cb556d5db8ed035bec5991#egg=bb-binary
-RUN pip3 install git+https://github.com/BioroboticsLab/bb_pipeline.git@6f26571bba6f8efc74e3659de4e5d6aa065f7975#egg=bb-pipeline
+RUN pip3 install git+https://github.com/BioroboticsLab/bb_binary.git@c724a61d440878d6a44a43e1523c1cc8fb7c7de9#egg=bb-binary
+RUN pip3 install git+https://github.com/BioroboticsLab/bb_pipeline.git@fd74cbd8660d30a28f2e8e23fe4c0863b5b531c6#egg=bb-pipeline
 RUN pip3 install git+https://github.com/berleon/cfg.git@9484201fe0f80cb39fd26d7193477e400776d785#egg=cfg
 
 RUN git clone https://github.com/berleon/pybeesgrid.git /opt/pybeesgrid && \
