@@ -5,7 +5,7 @@ git+https://github.com/BioroboticsLab/bb_pipeline.git@6f26571bba6f8efc74e3659de4
 git+https://github.com/berleon/cfg.git@9484201fe0f80cb39fd26d7193477e400776d785#egg=cfg
 bitarray==0.8.1
 cairocffi==0.7.2
-certifi==2017.7.27.1
+certifi==2022.12.7
 cffi==1.5.2
 chardet==3.0.4
 click==6.7
